@@ -1,0 +1,30 @@
+name: Weekly Design Pipeline
+on:
+  schedule:
+    - cron: '0 13 * * 1'  # Every Monday at 9am EST
+  workflow_dispatch:         # Also lets you trigger manually
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python scripts/01_research.py
+        env: { ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }} }
+      - run: python scripts/02_generate_prompts.py
+        env: { GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} }
+      - run: python scripts/03_generate_images.py
+        env: { IDEOGRAM_API_KEY: ${{ secrets.IDEOGRAM_API_KEY }} }
+      - run: python scripts/04_save_to_notion.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+      - run: python scripts/05_notify.py
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
