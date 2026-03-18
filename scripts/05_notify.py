@@ -1,7 +1,8 @@
 import smtplib, os, json
 from email.mime.text import MIMEText
 from datetime import datetime
-
+from dotenv import load_dotenv
+load_dotenv()
 with open('notion_ids.json') as f:
     ids = json.load(f)
 

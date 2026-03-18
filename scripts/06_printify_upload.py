@@ -1,5 +1,6 @@
 import requests, os, json, base64
-
+from dotenv import load_dotenv
+load_dotenv()
 PRINTIFY_KEY = os.environ['PRINTIFY_API_KEY']
 SHOP_ID = os.environ['PRINTIFY_SHOP_ID']
 NOTION_TOKEN = os.environ['NOTION_TOKEN']

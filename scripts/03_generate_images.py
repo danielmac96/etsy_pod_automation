@@ -2,7 +2,8 @@ import requests, json, os
 from pathlib import Path
 from datetime import datetime
 import time, urllib.parse
-
+from dotenv import load_dotenv
+load_dotenv()
 with open('prompts.json') as f:
     prompts = json.load(f)
 

@@ -1,6 +1,7 @@
 from pytrends.request import TrendReq
 import requests, json, os
-
+from dotenv import load_dotenv
+load_dotenv()
 
 def get_trending_keywords():
     pytrends = TrendReq()
@@ -18,14 +19,14 @@ def get_trending_keywords():
             rising += data['rising']['query'].head(3).tolist()
 
     # Also hit Etsy's public listing search for recent bestsellers
-    etsy_resp = requests.get(
-        'https://openapi.etsy.com/v3/application/listings/active',
-        params={'keywords': 'funny t-shirt', 'sort_on': 'score', 'limit': 25},
-        headers={'x-api-key': os.environ['ETSY_API_KEY']}
-    )
-    etsy_tags = []
-    for listing in etsy_resp.json().get('results', []):
-        etsy_tags += listing.get('tags', [])
+    # etsy_resp = requests.get(
+    #     'https://openapi.etsy.com/v3/application/listings/active',
+    #     params={'keywords': 'funny t-shirt', 'sort_on': 'score', 'limit': 25},
+    #     headers={'x-api-key': os.environ['ETSY_API_KEY']}
+    # )
+    # etsy_tags = []
+    # for listing in etsy_resp.json().get('results', []):
+    #     etsy_tags += listing.get('tags', [])
 
     # Combine and deduplicate
     all_keywords = list(set(rising + etsy_tags))[:20]

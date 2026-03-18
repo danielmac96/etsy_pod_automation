@@ -1,6 +1,7 @@
 import requests, json, os, base64
 from datetime import datetime
-
+from dotenv import load_dotenv
+load_dotenv()
 NOTION_TOKEN = os.environ['NOTION_TOKEN']
 DB_ID = os.environ['NOTION_DATABASE_ID']
 headers = {

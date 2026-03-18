@@ -1,6 +1,7 @@
 import google.generativeai as genai
 import json, os
-
+from dotenv import load_dotenv
+load_dotenv()
 # At the top of generate_prompts.py, add:
 def get_top_performers():
     resp = requests.post(
