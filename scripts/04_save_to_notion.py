@@ -1,7 +1,8 @@
-import requests, json, os, base64
+import requests, json, os
 from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
+
 NOTION_TOKEN = os.environ['NOTION_TOKEN']
 DB_ID = os.environ['NOTION_DATABASE_ID']
 headers = {
@@ -15,34 +16,59 @@ with open('results.json') as f:
 
 notion_page_ids = []
 
-for r in results:
-    # Upload image file to Notion (via file upload endpoint)
-    with open(r['filename'], 'rb') as img:
-        upload_resp = requests.post(
-            'https://api.notion.com/v1/file-uploads',
-            headers={**headers, 'Content-Type': 'multipart/form-data'},
-            files={'file': (r['filename'], img, 'image/png')}
-        )
-
+for i, r in enumerate(results):
     page = requests.post(
         'https://api.notion.com/v1/pages',
         headers=headers,
         json={
             'parent': {'database_id': DB_ID},
             'properties': {
-                'Title': {'title': [
-                    {'text': {'content': f"Design {datetime.now().strftime('%b %d')} #{results.index(r) + 1}"}}]},
-                'Prompt': {'rich_text': [{'text': {'content': r['prompt']}}]},
-                'Status': {'select': {'name': 'Unreviewed'}},
-                'Generated At': {'date': {'start': r['generated_at']}},
-                'Etsy Price': {'number': 24.99},
-                'Etsy Title': {'rich_text': [{'text': {'content': 'Auto-generated — edit before posting'}}]},
+                'Title': {
+                    'rich_text': [{'text': {'content': f"Design {datetime.now().strftime('%b %d')} #{i + 1}"}}]
+                },
+                'Prompt': {
+                    'title': [{'text': {'content': r['prompt']}}]
+                },
+                'Status': {
+                    'multi_select': [{'name': 'Unreviewed'}]
+                },
+                'Generated At': {
+                    'date': {'start': r['generated_at']}
+                },
+                'Etsy Title': {
+                    'rich_text': [{'text': {'content': 'Auto-generated — edit before posting'}}]
+                },
+                'Etsy Price': {
+                    'number': 24.99
+                },
+                'Printify Draft URL': {
+                    'url': None
+                },
+                'Etsy Post URL': {
+                    'url': None
+                },
+                'Views': {
+                    'number': 0
+                },
+                'Favorites': {
+                    'number': 0
+                },
+                'Sales': {
+                    'number': 0
+                },
             }
         }
     ).json()
 
-    notion_page_ids.append(page['id'])
-    print(f"Saved to Notion: {page['id']}")
+    print("Notion response:", json.dumps(page, indent=2))
+
+    if 'id' in page:
+        notion_page_ids.append(page['id'])
+        print(f"Saved to Notion: {page['id']}")
+    else:
+        print(f"Failed to save design {i + 1}")
 
 with open('notion_ids.json', 'w') as f:
     json.dump(notion_page_ids, f)
+
+print(f"\nDone. Saved {len(notion_page_ids)}/{len(results)} rows to Notion.")
