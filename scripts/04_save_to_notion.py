@@ -23,38 +23,20 @@ for i, r in enumerate(results):
         json={
             'parent': {'database_id': DB_ID},
             'properties': {
-                'Title': {
-                    'rich_text': [{'text': {'content': f"Design {datetime.now().strftime('%b %d')} #{i + 1}"}}]
-                },
-                'Prompt': {
-                    'title': [{'text': {'content': r['prompt']}}]
-                },
-                'Status': {
-                    'multi_select': [{'name': 'Unreviewed'}]
-                },
-                'Generated At': {
+                'generated_at': {
                     'date': {'start': r['generated_at']}
                 },
-                'Etsy Title': {
-                    'rich_text': [{'text': {'content': 'Auto-generated — edit before posting'}}]
+                'prompt': {
+                    'title': [{'text': {'content': r['prompt']}}]
                 },
-                'Etsy Price': {
-                    'number': 24.99
+                'status': {
+                    'multi_select': [{'name': 'Unreviewed'}]
                 },
-                'Printify Draft URL': {
-                    'url': None
+                'image_filename': {
+                    'rich_text': [{'text': {'content': r['filename']}}]
                 },
-                'Etsy Post URL': {
-                    'url': None
-                },
-                'Views': {
-                    'number': 0
-                },
-                'Favorites': {
-                    'number': 0
-                },
-                'Sales': {
-                    'number': 0
+                'image_file_location': {
+                    'rich_text': [{'text': {'content': os.path.join(os.getcwd(), r['filename'])}}]
                 },
             }
         }
