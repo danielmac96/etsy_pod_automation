@@ -1,46 +1,63 @@
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
 import google.generativeai as genai
-import json, os, re, requests
+import requests
 from dotenv import load_dotenv
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+import notion_fields as nf
+
 load_dotenv()
 
-NOTION_TOKEN = os.environ['NOTION_TOKEN']
-NOTION_DATABASE_ID = os.environ['NOTION_DATABASE_ID']
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
+NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+notion_headers = nf.notion_headers(NOTION_TOKEN)
 
-notion_headers = {
-    'Authorization': f'Bearer {NOTION_TOKEN}',
-    'Notion-Version': '2022-06-28',
-    'Content-Type': 'application/json'
-}
 
 def get_top_performers():
     try:
         resp = requests.post(
-            f'https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query',
+            f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query",
             headers=notion_headers,
             json={
-                'sorts': [{'property': 'Favorites', 'direction': 'descending'}],
-                'page_size': 5
-            }
+                "sorts": [{"property": nf.FAVORITES, "direction": "descending"}],
+                "page_size": 8,
+            },
         )
-        results = resp.json().get('results', [])
-        top = [
-            p['properties']['Prompt']['rich_text'][0]['text']['content']
-            for p in results
-            if p['properties'].get('Favorites', {}).get('number', 0) > 0
-        ]
-        return top
+        results = resp.json().get("results", [])
+        lines = []
+        for p in results[:5]:
+            props = p["properties"]
+            prompt = nf.rich_text_plain(props.get(nf.PROMPT, {}))
+            if not prompt.strip():
+                continue
+            fav = int(nf.number_value(props.get(nf.FAVORITES, {})) or 0)
+            views = int(nf.number_value(props.get(nf.VIEWS, {})) or 0)
+            dv = nf.number_value(props.get(nf.VIEWS_SINCE_SYNC, {}))
+            df = nf.number_value(props.get(nf.FAVORITES_SINCE_SYNC, {}))
+            bit = f"- {prompt[:200]}{'...' if len(prompt) > 200 else ''} | favs={fav}, views={views}"
+            if dv is not None:
+                bit += f", views_since_last_sync={int(dv)}"
+            if df is not None:
+                bit += f", favs_since_last_sync={int(df)}"
+            lines.append(bit)
+        return lines
     except Exception as e:
         print(f"No top performers yet (first run): {e}")
         return []
 
-top_prompts = get_top_performers()
 
-genai.configure(api_key=os.environ['GEMINI_API_KEY'])
-# model = genai.GenerativeModel('gemini-2.0-flash')
-# model = genai.GenerativeModel('gemini-1.5-flash')
-model = genai.GenerativeModel('gemini-2.5-flash')
+top_lines = get_top_performers()
 
-with open('keywords.json') as f:
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+model = genai.GenerativeModel("gemini-2.5-flash")
+
+with open("keywords.json") as f:
     keywords = json.load(f)
 
 system = """You are a shirt designer for a brand called Burnout and Barbells. 
@@ -58,20 +75,23 @@ Each prompt should:
 
 Return a JSON array of exactly 10 strings."""
 
-# Include top performers in prompt if we have any
 performer_context = ""
-if top_prompts:
-    performer_context = f"\n\nTop performing prompts from past weeks (use as style reference): {top_prompts}"
+if top_lines:
+    performer_context = (
+        "\n\nListings that resonated on Etsy (use as style/subject hints; "
+        "favor directions similar to higher views/favorites):\n"
+        + "\n".join(top_lines)
+    )
 
 resp = model.generate_content(
     f"{system}{performer_context}\n\nKeywords this week: {', '.join(keywords[:10])}"
 )
 
 raw = resp.text
-match = re.search(r'\[.*\]', raw, re.DOTALL)
+match = re.search(r"\[.*\]", raw, re.DOTALL)
 prompts = json.loads(match.group())
 
-with open('prompts.json', 'w') as f:
+with open("prompts.json", "w") as f:
     json.dump(prompts, f, indent=2)
 
 print("Generated prompts:", prompts)

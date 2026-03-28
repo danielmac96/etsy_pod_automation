@@ -1,9 +1,14 @@
-import smtplib, os, json
-from email.mime.text import MIMEText
+import json
+import os
+import smtplib
 from datetime import datetime
+from email.mime.text import MIMEText
+
 from dotenv import load_dotenv
+
 load_dotenv()
-with open('notion_ids.json') as f:
+
+with open("notion_ids.json") as f:
     ids = json.load(f)
 
 notion_url = f"https://www.notion.so/{os.environ['NOTION_DATABASE_ID'].replace('-', '')}"
@@ -16,20 +21,21 @@ Hi! Your weekly shirt designs are ready for review.
 Review them here: {notion_url}
 
 For each design:
-- Change Status from 'Unreviewed' to 'Approved' or 'Rejected'
-- Edit the Etsy Title and Tags if needed
-- Run the upload script once you're done approving
+- Set Pipeline Status to Approved or Rejected
+- Edit Etsy Title and Tags as needed for the listing
+- When the shirt is live on Etsy, set Pipeline Status to Published and paste Etsy Listing URL
 
-python scripts/06_printify_upload.py
+After approvals, create Printify drafts locally:
+  python scripts/06_printify_upload.py
 """
 
 msg = MIMEText(body)
-msg['Subject'] = f"[Etsy Pipeline] {len(ids)} designs ready for review"
-msg['From'] = os.environ['GMAIL_USER']
-msg['To'] = os.environ['GMAIL_USER']
+msg["Subject"] = f"[Etsy Pipeline] {len(ids)} designs ready for review"
+msg["From"] = os.environ["GMAIL_USER"]
+msg["To"] = os.environ["GMAIL_USER"]
 
-with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-    smtp.login(os.environ['GMAIL_USER'], os.environ['GMAIL_APP_PASSWORD'])
+with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+    smtp.login(os.environ["GMAIL_USER"], os.environ["GMAIL_APP_PASSWORD"])
     smtp.send_message(msg)
 
 print("Notification sent!")
