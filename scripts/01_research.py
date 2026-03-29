@@ -63,8 +63,8 @@ seasonal = get_seasonal_themes()
 print(f"Seasonal themes kept: {seasonal}")
 
 # Always use mostly seeds (reliable) + a few seasonal if any survived filtering
-weekly_keywords = random.sample(SEED_KEYWORDS, 8) + seasonal[:2]
-weekly_keywords = weekly_keywords[:10]  # cap at 10
+weekly_keywords = random.sample(SEED_KEYWORDS, 8) #+ seasonal[:2]
+weekly_keywords = weekly_keywords[:3]  # cap at 10
 
 with open('keywords.json', 'w') as f:
     json.dump(weekly_keywords, f, indent=2)

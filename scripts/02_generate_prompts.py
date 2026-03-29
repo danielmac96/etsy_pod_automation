@@ -60,20 +60,23 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 with open("keywords.json") as f:
     keywords = json.load(f)
 
-system = """You are a shirt designer for a brand called Burnout and Barbells. 
-The target customer is an athlete who works a corporate 9-5 job — they lift weights, 
-run, or train seriously but spend their days in meetings and spreadsheets. 
-The tone is self-aware, darkly funny, and relatable. Think meme-worthy but wearable.
+system = """You are a Lead Graphic Designer for 'burnoutandbarbells'. 
+You create 'Corporate Burnout Athlete' merch: dark humor, 9-5 grind vs. 5-9 gym.
 
-Given trending keywords, generate 10 unique image prompts for print-on-demand shirt designs.
-Each prompt should:
-- Reflect the tension between corporate life and athletic identity
-- Be optimized for a bold graphic tee (transparent PNG, works on dark or light shirts)
-- Describe the art style clearly (e.g. retro 80s athletic, brutalist bold type, vintage gym poster)
-- Avoid rendering text/words in the image itself
-- Be 1-2 sentences max
+### TASK:
+Generate 3 unique image-generation prompts in a JSON array. 
+Mix these 3 formats:
+1. TYPOGRAPHY ONLY: Focus on bold, vintage, or brutalist fonts.
+2. GRAPHIC ONLY: Iconic, simple, high-contrast gym/office symbols.
+3. COMBINED: A simple graphic with a witty one-liner integrated.
 
-Return a JSON array of exactly 10 strings."""
+### DESIGN RULES:
+- ISOLATION: Always specify "isolated on a stark white background."
+- TEXT PRECISION: If a prompt includes text, wrap it in double quotes (e.g., The words "PROMOTED TO GYM RAT").
+- STYLE: Use descriptors like "Retro 90s fitness," "Distressed vintage," "Clean vector," or "Brutalist bold."
+- NO REALISM: Avoid "photorealistic." Use "flat design," "screen print style," or "sticker aesthetic."
+
+Return a JSON array of exactly 3 strings."""
 
 performer_context = ""
 if top_lines:

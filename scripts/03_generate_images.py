@@ -30,9 +30,10 @@ headers = {"Authorization": f"Bearer {HF_KEY}"}
 date_suffix = datetime.now().strftime("%Y%m%d")
 take = min(10, len(prompts))
 
-for i in range(1):#range(take):
+for i in range(take):
     raw_prompt = prompts[i]
-    full_prompt = f"{raw_prompt}, shirt graphic design, bold illustration, no text, white background"
+    # Updated logic for the final string sent to Hugging Face
+    full_prompt = f"Professional apparel design, {raw_prompt}, high-quality screen print aesthetic, flat colors, isolated on a stark white background --v 6.0"
     print(f"\nGenerating image {i + 1}/{take}...")
 
     filename = f"images/design_{i + 1:02d}_{date_suffix}.png"
