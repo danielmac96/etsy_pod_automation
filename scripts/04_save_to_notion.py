@@ -33,10 +33,10 @@ for i, r in enumerate(results):
     prompt_text = r["prompt"]
     name = short_name(prompt_text, i)
     props = {
-        nf.NAME: {"title": [{"text": {"content": name}}]},
+        nf.NAME: {"title": [{"text": {"content": ""}}]},
         nf.PROMPT: {"rich_text": [{"text": {"content": prompt_text}}]},
         nf.PIPELINE_STATUS: {"select": {"name": nf.STATUS_UNREVIEWED}},
-        nf.ETSY_TITLE: {"rich_text": [{"text": {"content": name}}]},
+        nf.ETSY_TITLE: {"rich_text": [{"text": {"content": ""}}]},
         nf.TAGS: {"rich_text": [{"text": {"content": ""}}]},
         nf.IMAGE_URL: {"url": r["image_url"]},
         nf.GENERATED_AT: {"date": {"start": r["generated_at"][:10]}},

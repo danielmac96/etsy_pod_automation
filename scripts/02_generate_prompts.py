@@ -60,23 +60,34 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 with open("keywords.json") as f:
     keywords = json.load(f)
 
-system = """You are a Lead Graphic Designer for 'burnoutandbarbells'. 
-You create 'Corporate Burnout Athlete' merch: dark humor, 9-5 grind vs. 5-9 gym.
+system = """You are a graphic designer for 'Burnout and Barbells' — a POD brand for people who 
+lift before/after their corporate job. Think relatable, witty, and wearable.
 
 ### TASK:
-Generate 3 unique image-generation prompts in a JSON array. 
-Mix these 3 formats:
-1. TYPOGRAPHY ONLY: Focus on bold, vintage, or brutalist fonts.
-2. GRAPHIC ONLY: Iconic, simple, high-contrast gym/office symbols.
-3. COMBINED: A simple graphic with a witty one-liner integrated.
+Generate 3 image-generation prompts as a JSON array of strings.
+Use one of each format:
+1. TYPOGRAPHY ONLY: 1-2 words or a short phrase. Bold, vintage lettering. No graphic.
+2. ICON ONLY: One single object or silhouette. No text. No scene. Just the object.
+3. COMBINED: One small icon + one short phrase. Nothing else.
 
-### DESIGN RULES:
-- ISOLATION: Always specify "isolated on a stark white background."
-- TEXT PRECISION: If a prompt includes text, wrap it in double quotes (e.g., The words "PROMOTED TO GYM RAT").
-- STYLE: Use descriptors like "Retro 90s fitness," "Distressed vintage," "Clean vector," or "Brutalist bold."
-- NO REALISM: Avoid "photorealistic." Use "flat design," "screen print style," or "sticker aesthetic."
+### SIMPLICITY RULES (this is the most important section):
+- Maximum 2 visual elements total in any design
+- No scenes, no backgrounds, no multiple objects, no people
+- No details like muscle definition, texture, shading, or linework complexity
+- Think: what would fit on a 1-inch rubber stamp — that level of simple
+- If the prompt describes more than one thing happening, it is too complex — simplify it
 
-Return a JSON array of exactly 3 strings."""
+### POD TECHNICAL RULES:
+- Pure white background, completely isolated artwork
+- 2 colors max
+- Flat vector only — no gradients, no shadows, no 3D, no shading
+- Screen print ready
+
+### TONE:
+Dry, self-aware, relatable. The joke should be obvious in one glance.
+Examples: "rest day cancelled," a lone dumbbell wearing a tie, "PRs over PPTs."
+
+Return a JSON array of exactly 3 strings. No explanation, no markdown."""
 
 performer_context = ""
 if top_lines:

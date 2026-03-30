@@ -61,6 +61,34 @@ for page in candidates:
         print(f"Printify image upload missing id: {upload_body}")
         continue
 
+
+    # Fetch valid variants for this blueprint + provider
+    variants_resp = requests.get(
+        f"https://api.printify.com/v1/catalog/blueprints/6/print_providers/99/variants.json",
+        headers=pfy_headers,
+        timeout=30,
+    )
+    variants_resp.raise_for_status()
+    all_variants = variants_resp.json().get("variants", [])
+
+    # Only create a small set of color + size combos
+    VARIANT_WHITELIST = {
+        "Black / S", "Black / M", "Black / L", "Black / XL",
+        "White / S", "White / M", "White / L", "White / XL",
+    }
+
+    enabled_variants = [
+        {"id": v["id"], "price": 2499, "is_enabled": True}
+        for v in all_variants
+        if v["title"] in VARIANT_WHITELIST
+    ]
+    all_variant_ids = [v["id"] for v in enabled_variants]
+
+    if not enabled_variants:
+        # Fallback: print titles so you can see what Printify actually calls them
+        print("No variants matched! Available titles:", [v["title"] for v in all_variants[:10]])
+        continue
+
     product_resp = requests.post(
         f"https://api.printify.com/v1/shops/{SHOP_ID}/products.json",
         headers=pfy_headers,
@@ -68,15 +96,10 @@ for page in candidates:
             "title": etsy_title,
             "blueprint_id": 6,
             "print_provider_id": 99,
-            "variants": [
-                {"id": 17887, "price": 2499, "is_enabled": True},
-                {"id": 17888, "price": 2499, "is_enabled": True},
-                {"id": 17889, "price": 2499, "is_enabled": True},
-                {"id": 17890, "price": 2499, "is_enabled": True},
-            ],
+            "variants": enabled_variants,
             "print_areas": [
                 {
-                    "variant_ids": [17887, 17888, 17889, 17890],
+                    "variant_ids": all_variant_ids,
                     "placeholders": [
                         {
                             "position": "front",
