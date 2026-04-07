@@ -1,87 +1,43 @@
-import json
+import fal_client
 import os
-import sys
-import time
-from datetime import datetime
-from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
-load_dotenv()
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from upload_public_image import upload_public_image
+FAL_KEY = os.environ["FAL_KEY"]
+os.environ["FAL_KEY"] = FAL_KEY  # fal_client reads this automatically
 
 
+def generate_image(prompt: str, style: str = "graphic_tee") -> str:
+    """Returns a public image URL"""
 
-with open("prompts.json") as f:
-    prompts = json.load(f)
-
-Path("images").mkdir(exist_ok=True)
-results = []
-
-HF_KEY = os.environ["HF_API_KEY"]
-API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-headers = {"Authorization": f"Bearer {HF_KEY}"}
-
-date_suffix = datetime.now().strftime("%Y%m%d")
-take = min(10, len(prompts))
-
-for i in range(take):
-    raw_prompt = prompts[i]
-    # Updated logic for the final string sent to Hugging Face
-    full_prompt = f"Professional apparel design, {raw_prompt}, high-quality screen print aesthetic, flat colors, isolated on a stark white background --v 6.0"
-    print(f"\nGenerating image {i + 1}/{take}...")
-
-    filename = f"images/design_{i + 1:02d}_{date_suffix}.png"
-    image_url = ""
-    generated_at = datetime.now().isoformat()
-
-    for attempt in range(3):
-        print(f"  Attempt {attempt + 1}...")
-        response = requests.post(
-            API_URL,
-            headers=headers,
-            json={"inputs": full_prompt},
-            timeout=120,
-        )
-
-        if response.status_code == 200:
-            with open(filename, "wb") as out:
-                out.write(response.content)
-            print(f"  Saved {filename}")
-            try:
-                image_url = upload_public_image(filename)
-                print(f"  Public URL: {image_url}")
-            except Exception as e:
-                print(f"  ImgBB upload failed: {e}")
-            break
-        if response.status_code == 503:
-            wait = response.json().get("estimated_time", 20)
-            print(f"  Model loading, waiting {wait}s...")
-            time.sleep(wait)
-        else:
-            print(f"  Error {response.status_code}: {response.text}")
-            time.sleep(10)
-
-    if image_url:
-        results.append(
-            {
-                "prompt": raw_prompt,
-                "filename": filename,
-                "image_url": image_url,
-                "generated_at": generated_at,
+    # Route by design type
+    if style == "graphic_tee":
+        # Ideogram v3 - best for bold graphic/poster aesthetic
+        result = fal_client.run(
+            "fal-ai/ideogram/v3",
+            arguments={
+                "prompt": (
+                    f"Bold screen print graphic for apparel, flat illustration, "
+                    f"{prompt}, "
+                    f"isolated on pure white background, high contrast, "
+                    f"no gradients, no shadows, no photography, no 3D"
+                ),
+                "aspect_ratio": "1:1",
+                "style": "design",  # Ideogram style preset
+                "rendering_speed": "QUALITY",
             }
         )
-    else:
-        print(f"  Skipping design {i + 1} (no image or no public URL).")
+    elif style == "illustration":
+        # Recraft V4 - for cleaner vector-adjacent illustration runs
+        result = fal_client.run(
+            "fal-ai/recraft-v3",
+            arguments={
+                "prompt": (
+                    f"vector illustration, bold graphic design, "
+                    f"{prompt}, "
+                    f"isolated on white, flat colors, print-ready"
+                ),
+                "style": "vector_illustration",
+                "image_size": "square_hd",
+            }
+        )
 
-    time.sleep(2)
-
-with open("results.json", "w") as f:
-    json.dump(results, f, indent=2)
-
-print(f"\nDone. Generated {len(results)}/{take} images with public URLs.")
+    return result["images"][0]["url"]
