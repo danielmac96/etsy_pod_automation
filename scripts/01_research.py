@@ -1,8 +1,10 @@
-import requests, json, random
-from xml.etree import ElementTree
+import json, random
+import google.generativeai as genai
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 SEED_KEYWORDS = [
     "gym before work grind",
@@ -27,46 +29,30 @@ SEED_KEYWORDS = [
     "quarterly review PR attempt"
 ]
 
+def generate_keywords(seeds: list[str], n: int = 20) -> list[str]:
+    model = genai.GenerativeModel("gemini-2.5-flash")
 
-def get_seasonal_themes():
-    """Pull trending RSS but only keep non-person, non-sports themes"""
-    try:
-        url = "https://trends.google.com/trending/rss?geo=US"
-        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        root = ElementTree.fromstring(resp.content)
+    prompt = f"""You are a creative director for a gym/corporate culture apparel brand.
 
-        # Keywords that signal a topic is too news/person/sports specific
-        skip_words = [
-            'vs', 'game', 'score', 'nfl', 'nba', 'mlb', 'nhl', 'ncaa',
-            'election', 'president', 'senator', 'died', 'death', 'killed',
-            'arrested', 'trial', 'verdict', 'stock', 'price'
-        ]
+    Here are example keywords that capture the brand voice:
+    {json.dumps(random.sample(seeds, 8), indent=2)}
+    
+    Generate {n} NEW keyword phrases in the exact same style:
+    - Short (2-5 words)
+    - Captures the tension between office/corporate life and gym/lifting culture
+    - Sardonic, relatable, meme-aware tone
+    - No repeats of the examples above
+    
+    Return ONLY a JSON array of strings, no explanation."""
 
-        themes = []
-        for item in root.findall('.//item'):
-            title = item.find('title')
-            if title is not None:
-                text = title.text.lower()
-                # Skip if it looks like news/sports/politics
-                if not any(skip in text for skip in skip_words):
-                    # Only keep if it could inspire a design theme
-                    if len(text.split()) <= 3:  # short phrases only
-                        themes.append(title.text)
-
-        return themes[:5]
-    except Exception as e:
-        print(f"RSS fetch failed: {e}, using seeds only")
-        return []
+    response = model.generate_content(prompt)
+    text = response.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    return json.loads(text)
 
 
-seasonal = get_seasonal_themes()
-print(f"Seasonal themes kept: {seasonal}")
-
-# Always use mostly seeds (reliable) + a few seasonal if any survived filtering
-weekly_keywords = random.sample(SEED_KEYWORDS, 8) #+ seasonal[:2]
-weekly_keywords = weekly_keywords[:3]  # cap at 10
+keywords = generate_keywords(SEED_KEYWORDS, n=20)
 
 with open('keywords.json', 'w') as f:
-    json.dump(weekly_keywords, f, indent=2)
+    json.dump(keywords, f, indent=2)
 
-print(f"Keywords this week: {weekly_keywords}")
+print(f"Keywords this week: {keywords}")
