@@ -1,11 +1,11 @@
-name: Weekly Research & Prompt Generation
+name: Weekly Copy Generation & Printify Drafts
 on:
   schedule:
-    - cron: '0 14 * * 1'  # Monday 9am EST
+    - cron: '0 14 * * 4'  # Thursday 9am EST
   workflow_dispatch:
 
 jobs:
-  research-and-prompts:
+  copy-and-draft:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,20 +14,22 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
 
-      - name: Generate keywords (Gemini + Etsy suggestions)
-        run: python scripts/01_research.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
-
-      - name: Generate 25 prompts across 5 categories and save to Notion
-        run: python scripts/02_generate_prompts.py
+      - name: Generate AI product copy for Image Approved designs
+        run: python scripts/04_generate_copy.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
 
-      - name: Send prompt review notification
+      - name: Create Printify drafts for Copy Generated designs
+        run: python scripts/06_printify_upload.py
+        env:
+          PRINTIFY_API_KEY: ${{ secrets.PRINTIFY_API_KEY }}
+          PRINTIFY_SHOP_ID: ${{ secrets.PRINTIFY_SHOP_ID }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+
+      - name: Send draft-ready notification
         run: python scripts/05_notify.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}

@@ -1,11 +1,11 @@
-name: Weekly Research & Prompt Generation
+name: Weekly Image Generation
 on:
   schedule:
-    - cron: '0 14 * * 1'  # Monday 9am EST
+    - cron: '0 14 * * 3'  # Wednesday 9am EST
   workflow_dispatch:
 
 jobs:
-  research-and-prompts:
+  generate-images:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,20 +14,15 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
 
-      - name: Generate keywords (Gemini + Etsy suggestions)
-        run: python scripts/01_research.py
+      - name: Generate images for Prompt Approved designs
+        run: python scripts/03_generate_images.py
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
-
-      - name: Generate 25 prompts across 5 categories and save to Notion
-        run: python scripts/02_generate_prompts.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FAL_KEY: ${{ secrets.FAL_KEY }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
 
-      - name: Send prompt review notification
+      - name: Send image review notification
         run: python scripts/05_notify.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}

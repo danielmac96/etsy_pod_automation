@@ -21,7 +21,7 @@ import notion_fields as nf
 load_dotenv()
 
 ETSY_KEY = os.environ.get("ETSY_API_KEY", "")
-ETSY_TOKEN = os.environ.get("ETSY_SHOP_ID", "")
+ETSY_TOKEN = os.environ.get("ETSY_ACCESS_TOKEN", "")
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 DB_ID = os.environ["NOTION_DATABASE_ID"]
 

@@ -1,0 +1,23 @@
+name: Weekly Stats Sync
+on:
+  schedule:
+    - cron: '0 14 * * 0'  # Sunday 9am EST
+  workflow_dispatch:
+
+jobs:
+  sync-stats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+
+      - name: Sync Etsy listing stats to Notion
+        run: python scripts/07_track_stats.py
+        env:
+          ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
+          ETSY_ACCESS_TOKEN: ${{ secrets.ETSY_ACCESS_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
