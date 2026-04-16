@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ resp = requests.post(
     json={
         "filter": {
             "and": [
-                {"property": nf.PIPELINE_STATUS, "select": {"equals": nf.STATUS_APPROVED}},
+                {"property": nf.PIPELINE_STATUS, "select": {"equals": nf.STATUS_COPY_GENERATED}},
                 {"property": nf.PRINTIFY_DRAFT_URL, "url": {"is_empty": True}},
             ]
         }
@@ -33,6 +34,8 @@ resp = requests.post(
 )
 resp.raise_for_status()
 candidates = resp.json().get("results", [])
+
+drafts_created = 0
 
 for page in candidates:
     props = page["properties"]
@@ -61,10 +64,9 @@ for page in candidates:
         print(f"Printify image upload missing id: {upload_body}")
         continue
 
-
     # Fetch valid variants for this blueprint + provider
     variants_resp = requests.get(
-        f"https://api.printify.com/v1/catalog/blueprints/6/print_providers/99/variants.json",
+        "https://api.printify.com/v1/catalog/blueprints/6/print_providers/99/variants.json",
         headers=pfy_headers,
         timeout=30,
     )
@@ -85,7 +87,6 @@ for page in candidates:
     all_variant_ids = [v["id"] for v in enabled_variants]
 
     if not enabled_variants:
-        # Fallback: print titles so you can see what Printify actually calls them
         print("No variants matched! Available titles:", [v["title"] for v in all_variants[:10]])
         continue
 
@@ -141,4 +142,18 @@ for page in candidates:
         },
     )
     patch.raise_for_status()
+    drafts_created += 1
     print(f"Draft created: {draft_url}")
+
+# Write final notify context for 05_notify.py
+with open("notify_context.json", "w") as f:
+    json.dump({
+        "count": drafts_created,
+        "stage": "drafts",
+        "detail": (
+            f"{drafts_created} Printify draft(s) created from {len(candidates)} approved design(s). "
+            f"Review drafts in Printify, then publish to Etsy."
+        ),
+    }, f)
+
+print(f"\nDone. {drafts_created}/{len(candidates)} Printify drafts created.")
