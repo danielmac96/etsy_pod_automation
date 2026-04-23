@@ -1,251 +1,208 @@
 # CLAUDE.md — Etsy POD Automation
 
-This file provides guidance for AI assistants working in this repository.
+Automated weekly pipeline for an Etsy print-on-demand shop selling gym + corporate culture graphic tees. Runs Monday–Sunday via GitHub Actions. **Only two manual steps:** approve prompts in Notion on Monday, approve images on Wednesday.
 
-## Project Overview
+---
 
-This is a **weekly automated design-to-market pipeline** for an Etsy print-on-demand (POD) shop selling gym + corporate culture graphic tees. The target audience is corporate workers who identify with gym culture ("corporate drone who lifts heavy").
-
-The pipeline runs across three days each week via GitHub Actions. The only user actions required are clicking a status field in Notion twice — once to approve prompts, once to approve images.
-
-## Pipeline Architecture
+## Weekly Flow
 
 ```
-MONDAY (auto)
-  01_research.py        → keywords.json (Gemini AI + Etsy suggested searches)
-  02_generate_prompts.py → 25 prompts in Notion across 5 categories (status: Prompt Unreviewed)
-  05_notify.py          → Email: "25 prompts ready to approve"
-
-  [USER: set Prompt Approved / Prompt Rejected in Notion]
-
-WEDNESDAY (auto)
-  03_generate_images.py → images for Prompt Approved pages → Notion updated (status: Image Unreviewed)
-  05_notify.py          → Email: "X images ready to approve"
-
-  [USER: set Image Approved / Image Rejected in Notion]
-
-THURSDAY (auto)
-  04_generate_copy.py   → Gemini generates title, description, tags for Image Approved → Notion updated
-  06_printify_upload.py → Creates Printify drafts for Copy Generated pages → Notion updated (status: Drafted)
-  05_notify.py          → Email: "X Printify drafts ready to review"
-
-  [USER: review draft in Printify, publish to Etsy, paste Etsy URL into Notion]
-
-SUNDAY (auto)
-  07_track_stats.py     → Syncs views/favorites from Etsy API → Notion updated (feedback loop for 02)
+MON  01_research.py → 02_generate_prompts.py → 05_notify.py
+     [You: approve/reject prompts in Notion]
+WED  03_generate_images.py → 05_notify.py
+     [You: approve/reject images in Notion]
+THU  04_generate_copy.py → 06_printify_upload.py → 05_notify.py
+     [You: publish drafts in Printify, paste Etsy URL into Notion]
+SUN  07_track_stats.py
 ```
 
-## Repository Structure
+Notion is the single source of truth. JSON files (`keywords.json`, `prompts.json`, etc.) are local audit logs only.
+
+---
+
+## Scripts
+
+### `01_research.py`
+Generates keywords for this week's designs.
+- **Reads:** hardcoded seed keywords + `ETSY_API_KEY` (optional, for Etsy suggested searches)
+- **Writes:** `keywords.json` — list of `{keyword, source}` dicts (`source`: `"gemini"` or `"etsy"`)
+- **APIs:** Gemini AI, Etsy v3 suggested-searches
+
+### `02_generate_prompts.py`
+Generates 25 prompts (5 per category) and saves them to Notion for approval.
+- **Reads:** `keywords.json`, top-performing Published pages from Notion (feedback loop)
+- **Writes:** 25 Notion pages (`Pipeline Status: Prompt Unreviewed`), `prompts.json` (audit log), `notify_context.json`
+- **APIs:** Gemini AI, Notion
+
+### `03_generate_images.py`
+Generates images for every prompt the user approved in Notion.
+- **Reads:** Notion pages where `Pipeline Status = Prompt Approved`
+- **Writes:** `images/*.png` locally, uploads to ImgBB, PATCHes Notion pages (`Image URL`, `Pipeline Status: Image Unreviewed`), `images/results.json`, `notify_context.json`
+- **APIs:** FAL.ai (Ideogram v3), ImgBB, Notion
+
+### `04_generate_copy.py`
+Generates Etsy product copy (title, description, 13 tags) for every image the user approved.
+- **Reads:** Notion pages where `Pipeline Status = Image Approved`
+- **Writes:** PATCHes Notion (`Etsy Title`, `Description`, `Tags`, `Pipeline Status: Copy Generated`), `notify_context.json`
+- **APIs:** Gemini AI, Notion
+
+### `05_notify.py`
+Sends a stage-appropriate email after each pipeline phase.
+- **Reads:** `notify_context.json` (`stage`, `count`, `detail`)
+- **Writes:** Email via Gmail SMTP
+- **Stage values:** `"prompts"` / `"images"` / `"drafts"`
+
+### `06_printify_upload.py`
+Creates Printify product drafts for every design with generated copy.
+- **Reads:** Notion pages where `Pipeline Status = Copy Generated` and no `Printify Draft URL`
+- **Writes:** Printify draft products, PATCHes Notion (`Printify Draft URL`, `Pipeline Status: Drafted`), `notify_context.json`
+- **APIs:** Printify, Notion
+
+### `07_track_stats.py`
+Syncs Etsy listing stats (views, favorites) back into Notion. Feeds into 02 the following Monday.
+- **Reads:** Notion pages where `Etsy Listing URL` is set
+- **Writes:** PATCHes Notion (`Views`, `Favorites`, `Views Since Last Sync`, `Favorites Since Last Sync`, `Stats Updated`)
+- **APIs:** Etsy v3, Notion
+
+### `notion_fields.py`
+Shared constants and helpers. All Notion property names and pipeline status strings live here. **Always use these constants — never hardcode strings.**
+
+### `test_pipeline.py`
+Inspection and dry-run tool. Does not modify any pipeline state.
+
+---
+
+## Pipeline Status Values
 
 ```
-etsy_pod_automation/
-├── .github/workflows/
-│   ├── weekly.yml                # Monday: research + prompt generation (renamed from original)
-│   ├── weekly_images.yml         # Wednesday: image generation for approved prompts
-│   ├── weekly_copy_and_draft.yml # Thursday: AI copy generation + Printify draft creation
-│   └── weekly_stats.yml          # Sunday: Etsy stats sync
-├── scripts/
-│   ├── 01_research.py            # Gemini keywords + Etsy suggested searches → keywords.json
-│   ├── 02_generate_prompts.py    # 5 categories × 5 prompts → saved to Notion + prompts.json audit log
-│   ├── 03_generate_images.py     # Reads Prompt Approved from Notion → generates images → Image Unreviewed
-│   ├── 04_generate_copy.py       # Reads Image Approved from Notion → Gemini copy → Copy Generated
-│   ├── 04_save_to_notion.py      # SUPERSEDED — kept for reference only, not used in workflow
-│   ├── 05_notify.py              # Stage-aware email notification (reads notify_context.json)
-│   ├── 06_printify_upload.py     # Reads Copy Generated from Notion → Printify drafts → Drafted
-│   ├── 07_track_stats.py         # Syncs Etsy listing stats → Notion (feedback loop)
-│   ├── notion_fields.py          # Shared: Notion DB schema constants and helpers
-│   └── upload_public_image.py    # Utility: uploads a local image to ImgBB
-└── requirements.txt
+Prompt Unreviewed → Prompt Approved / Prompt Rejected
+                          ↓
+                    Image Unreviewed → Image Approved / Image Rejected
+                                             ↓
+                                       Copy Generated → Drafted → Published
 ```
 
-## Data Flow Detail
+---
 
-Each script that completes a stage writes `notify_context.json` so `05_notify.py` knows what email to send.
+## Testing & Debugging
 
-```
-01_research.py  →  keywords.json  (list of {keyword, source} dicts)
-                        ↓
-02_generate_prompts.py  →  Notion pages (status: Prompt Unreviewed)
-                        →  prompts.json  (audit log)
-                        →  notify_context.json  (stage: "prompts")
-                        ↓  [USER APPROVES PROMPTS IN NOTION]
-03_generate_images.py  →  Notion pages PATCHED (Image URL, status: Image Unreviewed)
-                       →  images/results.json  (audit log)
-                       →  notify_context.json  (stage: "images")
-                        ↓  [USER APPROVES IMAGES IN NOTION]
-04_generate_copy.py  →  Notion pages PATCHED (Etsy Title, Description, Tags, status: Copy Generated)
-                     →  notify_context.json  (stage: "copy", overwritten by 06)
-                        ↓
-06_printify_upload.py  →  Printify draft created
-                       →  Notion pages PATCHED (Printify Draft URL, status: Drafted)
-                       →  notify_context.json  (stage: "drafts")
-                        ↓  [USER PUBLISHES IN PRINTIFY, PASTES ETSY URL INTO NOTION]
-07_track_stats.py  →  Notion PATCHED (Views, Favorites, deltas, Stats Updated)
-                   →  Data feeds back into 02 top performers next Monday
-```
+All commands run from the repo root. Requires a `.env` file with credentials (see Environment Variables below).
 
-## Notion Database Schema
-
-All property names are defined as constants in `scripts/notion_fields.py` — **always use those constants, never hardcode strings**.
-
-### Properties
-
-| Property | Type | Description |
-|---|---|---|
-| `Name` | Title | First 100 chars of the prompt (auto-set by script) |
-| `Prompt` | Rich Text | Full image generation prompt |
-| `Category` | Select | One of the 5 audience categories |
-| `Pipeline Status` | Select | Current workflow stage (see status values below) |
-| `Etsy Title` | Rich Text | AI-generated Etsy listing title (set by 04) |
-| `Description` | Rich Text | AI-generated product description (set by 04) |
-| `Tags` | Rich Text | AI-generated Etsy tags, comma-separated (set by 04) |
-| `Image URL` | URL | ImgBB CDN link to generated image (set by 03) |
-| `Generated At` | Date | When the image was created (set by 03) |
-| `Printify Draft URL` | URL | Link to the draft in Printify editor (set by 06) |
-| `Etsy Listing URL` | URL | Live Etsy listing URL (set manually by owner) |
-| `Views` | Number | Total Etsy listing views (set by 07) |
-| `Favorites` | Number | Total Etsy listing favorites (set by 07) |
-| `Views Since Last Sync` | Number | Delta views since last stat sync (set by 07) |
-| `Favorites Since Last Sync` | Number | Delta favorites since last stat sync (set by 07) |
-| `Stats Updated` | Date | Timestamp of last 07_track_stats.py run |
-
-### Pipeline Status Values (in order)
-
-```
-Prompt Unreviewed  →  Prompt Approved / Prompt Rejected
-                            ↓
-                       Image Unreviewed  →  Image Approved / Image Rejected
-                                                  ↓
-                                             Copy Generated
-                                                  ↓
-                                               Drafted
-                                                  ↓
-                                             Published
-```
-
-### Notion DB Setup Required
-
-Add these two new properties if migrating from the old schema:
-- **Category** — Select type with options: `Corporate Grind`, `Iron Discipline`, `Cardio Confession`, `Recovery Mode`, `Gym Flex`
-- **Description** — Rich Text type
-
-Update the **Pipeline Status** Select options to include all values listed above.
-
-## The Five Categories
-
-Defined in `02_generate_prompts.py` as `CATEGORIES`. Each gets 5 prompts per week (25 total).
-
-| Category | Theme |
-|---|---|
-| `Corporate Grind` | Office frustration, meetings, burnout — gym as the escape valve |
-| `Iron Discipline` | Powerlifting philosophy, 5am club, consistency, PRs as identity |
-| `Cardio Confession` | The lifter doing cardio under protest, step goals, zone-2 irony |
-| `Recovery Mode` | Rest days, deload weeks, overtrained and overworked |
-| `Gym Flex` | PR celebrations, bro culture humor, gym memes, chalk and straps |
-
-## Environment Variables
-
-| Variable | Used By | Purpose |
-|---|---|---|
-| `GEMINI_API_KEY` | 01, 02, 04 | Google Gemini API key |
-| `NOTION_TOKEN` | 02, 03, 04, 06, 07 | Notion integration Bearer token |
-| `NOTION_DATABASE_ID` | 02, 03, 04, 05, 06, 07 | Notion database UUID |
-| `FAL_KEY` | 03 | FAL.ai API key (Ideogram image generation) |
-| `IMGBB_API_KEY` | 03 | ImgBB API key for image hosting |
-| `GMAIL_USER` | 05 | Gmail address to send notifications from |
-| `GMAIL_APP_PASSWORD` | 05 | Gmail app-specific password |
-| `PRINTIFY_API_KEY` | 06 | Printify API key |
-| `PRINTIFY_SHOP_ID` | 06 | Printify shop ID |
-| `ETSY_API_KEY` | 01, 07 | Etsy REST API key (01: keyword suggestions; 07: listing stats) |
-| `ETSY_ACCESS_TOKEN` | 07 | Etsy OAuth2 Bearer token |
-
-## Development Conventions
-
-### Language & Runtime
-- **Python 3.11** (enforced in GitHub Actions)
-- No build system — scripts run directly with `python scripts/NN_script_name.py`
-- Dependencies managed via `requirements.txt`
-
-### Code Style
-- **Functional/procedural** scripts — no classes, minimal abstraction
-- Use `pathlib.Path` for all file paths
-- All secrets must come from environment variables (`os.environ.get(...)` or `os.getenv(...)`)
-- Use `.raise_for_status()` on every HTTP response from external APIs
-
-### Notion API
-- Use `requests` directly (not the `notion-client` package, despite it being in requirements.txt)
-- Use the shared headers/helpers in `notion_fields.py` — do not duplicate Notion request boilerplate
-- Property names in API payloads must exactly match the constants in `notion_fields.py`
-- Scripts that own a pipeline stage **PATCH** existing Notion pages; only script 02 **POSTs** new pages
-
-### JSON Data Files
-- `keywords.json` — list of `{keyword, source}` dicts (source: `"gemini"` or `"etsy"`)
-- `prompts.json` — list of `{category, prompt}` dicts (audit log only; Notion is the source of truth)
-- `images/results.json` — list of `{page_id, prompt, local_path, imgbb_url}` (audit log only)
-- `notify_context.json` — `{count, stage, detail}` consumed by `05_notify.py`; overwritten each run
-
-### Feedback Loop
-Script `02_generate_prompts.py` calls `get_top_performers()` to fetch published designs sorted by favorites. Their prompts and categories are included as positive examples in the Gemini prompt for each category, so high-performing designs influence future prompt generation.
-
-### Adding a New Script
-1. Number it appropriately (e.g., `08_new_step.py`)
-2. Read its gate condition from Notion (query for a specific Pipeline Status)
-3. PATCH Notion pages (not POST) — the page already exists from step 02
-4. Write `notify_context.json` if followed by `05_notify.py`
-5. Add any new env vars to this file and to the relevant workflow file
-
-## Running Locally
-
+### Check current state
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Full report: all checkpoint files + Notion status breakdown
+python scripts/test_pipeline.py
 
-# Create a .env file with all required variables (see Environment Variables table above)
+# Checkpoint files only (no Notion query needed)
+python scripts/test_pipeline.py files
 
-# Run the Monday pipeline:
+# Notion DB counts grouped by pipeline status
+python scripts/test_pipeline.py notion
+```
+
+### Validate before running a step
+Checks that required inputs exist and env vars are set — run this before each step.
+```bash
+python scripts/test_pipeline.py validate 01   # env vars only
+python scripts/test_pipeline.py validate 02   # keywords.json + env vars
+python scripts/test_pipeline.py validate 03   # Prompt Approved count + env vars
+python scripts/test_pipeline.py validate 04   # Image Approved count + env vars
+python scripts/test_pipeline.py validate 06   # Copy Generated count + env vars
+python scripts/test_pipeline.py validate 07   # Etsy listing URLs + env vars
+```
+
+### Preview AI output without saving (tune prompts here)
+These make real API calls but write nothing to disk or Notion.
+```bash
+# Preview keyword generation from Gemini + Etsy
+python scripts/test_pipeline.py dry-run 01
+
+# Preview one prompt per category (uses your actual keywords.json)
+python scripts/test_pipeline.py dry-run 02
+
+# Preview title/description/tags for the first Image Approved page
+python scripts/test_pipeline.py dry-run 04
+```
+
+### Run a step manually
+```bash
 python scripts/01_research.py
 python scripts/02_generate_prompts.py
-
-# Then approve some prompts in Notion, then run Wednesday:
 python scripts/03_generate_images.py
-
-# Then approve some images in Notion, then run Thursday:
 python scripts/04_generate_copy.py
 python scripts/06_printify_upload.py
-
-# Weekly stats (run anytime against published listings):
 python scripts/07_track_stats.py
 ```
 
-## CI/CD — GitHub Actions
+---
 
-| Workflow File | Schedule | What Runs |
+## Environment Variables
+
+Create a `.env` file in the repo root for local development.
+
+| Variable | Required By | Purpose |
 |---|---|---|
-| `weekly.yml` | Monday 9am EST (`0 14 * * 1`) | 01 → 02 → 05 (notify: prompts) |
-| `weekly_images.yml` | Wednesday 9am EST (`0 14 * * 3`) | 03 → 05 (notify: images) |
-| `weekly_copy_and_draft.yml` | Thursday 9am EST (`0 14 * * 4`) | 04 → 06 → 05 (notify: drafts) |
-| `weekly_stats.yml` | Sunday 9am EST (`0 14 * * 0`) | 07 |
+| `GEMINI_API_KEY` | 01, 02, 04 | Google Gemini AI |
+| `NOTION_TOKEN` | 02, 03, 04, 06, 07 | Notion integration token |
+| `NOTION_DATABASE_ID` | 02–07 | Notion database UUID |
+| `FAL_KEY` | 03 | FAL.ai (Ideogram image gen) |
+| `IMGBB_API_KEY` | 03 | ImgBB image hosting |
+| `GMAIL_USER` | 05 | Gmail send address |
+| `GMAIL_APP_PASSWORD` | 05 | Gmail app password |
+| `PRINTIFY_API_KEY` | 06 | Printify API |
+| `PRINTIFY_SHOP_ID` | 06 | Printify shop ID |
+| `ETSY_API_KEY` | 01, 07 | Etsy REST API |
+| `ETSY_ACCESS_TOKEN` | 07 | Etsy OAuth2 bearer token |
 
-All workflows also support `workflow_dispatch` for manual triggering from the GitHub Actions UI.
+---
 
-All secrets must be set in **Settings → Secrets and variables → Actions**.
+## GitHub Actions Workflows
 
-## Known Issues & Quirks
+| File | Schedule | Steps |
+|---|---|---|
+| `weekly.yml` | Mon 9am EST | 01 → 02 → 05 |
+| `weekly_images.yml` | Wed 9am EST | 03 → 05 |
+| `weekly_copy_and_draft.yml` | Thu 9am EST | 04 → 06 → 05 |
+| `weekly_stats.yml` | Sun 9am EST | 07 |
 
-- **`notion-client` in requirements:** Imported in `notion_fields.py` but scripts use `requests` directly for all Notion API calls
-- **`04_save_to_notion.py`:** Superseded by `04_generate_copy.py` + the Notion upload now built into `02_generate_prompts.py`. Kept for reference; not called by any workflow.
-- **`HF_API_KEY`:** Legacy env var from a previous Hugging Face integration. No longer referenced anywhere.
-- **No automated tests:** When making changes, manually run the relevant script and verify its `notify_context.json` output and Notion database state
-- **First run edge case:** `02_generate_prompts.py` handles an empty Notion database gracefully (no top performers yet) by catching the exception in `get_top_performers()` and continuing with keyword context only
+All workflows support `workflow_dispatch` for manual triggering. Secrets are set in **Settings → Secrets and variables → Actions**.
 
-## External Services Summary
+---
 
-| Service | Used For |
-|---|---|
-| Google Gemini AI | Keyword research (01), prompt generation (02), copy writing (04) |
-| Etsy API v3 | Keyword suggestions (01), listing stats (07) |
-| FAL.ai (Ideogram v3) | AI image generation (03) |
-| ImgBB | Public image hosting/CDN (03) |
-| Notion API | Central state store for all design workflow data |
-| Gmail SMTP | Owner notification emails (05) |
-| Printify API | Print-on-demand product draft creation (06) |
+## Notion DB Properties
+
+| Property | Type | Set By |
+|---|---|---|
+| Name | Title | 02 |
+| Prompt | Rich Text | 02 |
+| Category | Select | 02 |
+| Pipeline Status | Select | all scripts |
+| Etsy Title | Rich Text | 04 |
+| Description | Rich Text | 04 |
+| Tags | Rich Text | 04 |
+| Image URL | URL | 03 |
+| Generated At | Date | 03 |
+| Printify Draft URL | URL | 06 |
+| Etsy Listing URL | URL | you (manual) |
+| Views | Number | 07 |
+| Favorites | Number | 07 |
+| Views Since Last Sync | Number | 07 |
+| Favorites Since Last Sync | Number | 07 |
+| Stats Updated | Date | 07 |
+
+**First-time setup:** add `Category` (Select) and `Description` (Rich Text) if migrating from old schema. Update Pipeline Status options to match all values in the status flow above.
+
+---
+
+## Code Conventions
+
+- Python 3.11, procedural scripts, no classes
+- All Notion property names via constants in `notion_fields.py`
+- HTTP calls use `requests` directly; always call `.raise_for_status()`
+- Script 02 POSTs new Notion pages; all other scripts PATCH existing ones
+- Secrets via `os.environ.get(...)` only — never hardcoded
+
+## Known Issues
+
+- `04_save_to_notion.py` is superseded — kept for reference, not used in any workflow
+- `notion-client` in `requirements.txt` is unused; scripts use `requests` directly
