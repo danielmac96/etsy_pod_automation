@@ -1,16 +1,16 @@
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
-import google.genai as genai
+from google import genai
 import requests
 from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 import notion_fields as nf
+from gemini_client import generate_json
 
 load_dotenv()
 
@@ -18,8 +18,7 @@ NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 notion_headers = nf.notion_headers(NOTION_TOKEN)
 
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-2.5-flash")
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 # Five audience categories — each gets 5 prompts per week (25 total)
 CATEGORIES = {
@@ -46,6 +45,21 @@ CATEGORIES = {
 }
 
 PROMPTS_PER_CATEGORY = 5
+
+
+def load_design_briefs() -> dict[str, list[dict]]:
+    """Load design_briefs.json and group briefs by category."""
+    briefs_by_category: dict[str, list[dict]] = {cat: [] for cat in CATEGORIES}
+    try:
+        with open("design_briefs.json", encoding="utf-8") as f:
+            run = json.load(f)
+        for brief in run.get("briefs", []):
+            cat = brief.get("category", "")
+            if cat in briefs_by_category:
+                briefs_by_category[cat].append(brief)
+    except FileNotFoundError:
+        print("design_briefs.json not found — running without market research context")
+    return briefs_by_category
 
 
 def get_top_performers() -> list[str]:
@@ -87,14 +101,31 @@ def get_top_performers() -> list[str]:
         return []
 
 
+def _build_brief_context(briefs: list[dict]) -> str:
+    if not briefs:
+        return ""
+    lines = ["\n\nMarket research — design briefs proven by real Etsy data (use as creative fuel):"]
+    for b in briefs[:3]:
+        db = b.get("design_brief", {})
+        ev = b.get("evidence", {})
+        sat = ev.get("saturation", "?")
+        vol = ev.get("search_volume_signal", "?")
+        tags = ", ".join(ev.get("etsy_tag_overlap", [])[:6])
+        lines.append(
+            f'- Concept: "{b["concept_name"]}" | Headline: "{db.get("headline_text","")}" '
+            f'| Visual: {db.get("visual_concept","")} '
+            f'| Target: {db.get("target_buyer","")} '
+            f'| Etsy signal: volume={vol}, saturation={sat}, tags=[{tags}]'
+        )
+    return "\n".join(lines)
+
+
 def generate_prompts_for_category(
     category: str,
     description: str,
-    keywords: list[str],
+    briefs: list[dict],
     top_lines: list[str],
 ) -> list[str]:
-    keyword_sample = keywords[:15] if len(keywords) > 15 else keywords
-
     performer_context = ""
     if top_lines:
         category_performers = [l for l in top_lines if f"[{category}]" in l]
@@ -104,13 +135,12 @@ def generate_prompts_for_category(
             + "\n".join(relevant)
         )
 
+    brief_context = _build_brief_context(briefs)
+
     prompt = f"""You are a witty copywriter for a viral Etsy shop selling gym + corporate culture graphic tees.
 
 Category: {category}
-Category theme: {description}
-
-Keywords for inspiration this week:
-{json.dumps(keyword_sample, indent=2)}{performer_context}
+Category theme: {description}{brief_context}{performer_context}
 
 Generate {PROMPTS_PER_CATEGORY} image generation prompts for screen-print t-shirt graphics in the "{category}" category. Each prompt must:
 - Have a funny, specific concept rooted in the category theme (not generic — think concrete moments)
@@ -118,6 +148,7 @@ Generate {PROMPTS_PER_CATEGORY} image generation prompts for screen-print t-shir
 - Be Etsy-sellable: the kind of shirt someone buys for themselves or as a gift
 - Include the slogan/text on the shirt in quotes inside the prompt
 - Include art direction: flat vector, bold typography, two colors, screen print ready, pure white background, isolated artwork
+- Where relevant, draw on or riff from the market research briefs above
 
 Good format examples:
 - "Bold retro varsity graphic with the text 'SKIPPED LEG DAY (it was a full-day offsite)', flat vector, two colors, screen print ready, pure white background"
@@ -125,10 +156,7 @@ Good format examples:
 
 Return ONLY a JSON array of {PROMPTS_PER_CATEGORY} strings, no explanation."""
 
-    resp = model.generate_content(prompt)
-    raw = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    return json.loads(match.group())
+    return generate_json(client, prompt)
 
 
 def save_prompt_to_notion(prompt_text: str, category: str) -> str | None:
@@ -151,25 +179,16 @@ def save_prompt_to_notion(prompt_text: str, category: str) -> str | None:
     return None
 
 
-# Load keywords — support both old format (list of strings) and new annotated format
-with open("keywords.json") as f:
-    raw_keywords = json.load(f)
-
-if raw_keywords and isinstance(raw_keywords[0], dict):
-    # Etsy-sourced keywords first (real market signal), then Gemini
-    etsy_kws = [k["keyword"] for k in raw_keywords if k.get("source") == "etsy"]
-    gemini_kws = [k["keyword"] for k in raw_keywords if k.get("source") == "gemini"]
-    all_keywords = etsy_kws + gemini_kws
-else:
-    all_keywords = raw_keywords
-
+briefs_by_category = load_design_briefs()
 top_lines = get_top_performers()
 all_prompts = []
 notion_page_ids = []
 
 for category, description in CATEGORIES.items():
     print(f"\n--- Generating prompts for: {category} ---")
-    prompts = generate_prompts_for_category(category, description, all_keywords, top_lines)
+    prompts = generate_prompts_for_category(
+        category, description, briefs_by_category[category], top_lines
+    )
     for prompt_text in prompts:
         page_id = save_prompt_to_notion(prompt_text, category)
         if page_id:

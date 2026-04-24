@@ -1,11 +1,8 @@
 # Use Python 3.10 or newer. On 3.9, google.api_core warns that support is dropped;
 # upgrading packages alone does not fix that — upgrade the interpreter.
 requests==2.31.0
-google-api-core>=2.24.0
-# Pin grpcio so pip installs the wheel matching your Python (e.g. cp313 on 3.13). Wrong ABI causes: cannot import name 'cygrpc'.
-grpcio>=1.68.0
-google-generativeai>=0.8.3
-pytrends==4.9.2
+google-genai>=1.0.0
+pydantic>=2.0.0
 python-dotenv==1.0.1
 notion-client==2.2.1
 fal-client
