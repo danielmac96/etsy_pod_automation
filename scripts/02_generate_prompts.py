@@ -4,7 +4,7 @@ import re
 import sys
 from pathlib import Path
 
-import google.generativeai as genai
+import google.genai as genai
 import requests
 from dotenv import load_dotenv
 

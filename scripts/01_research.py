@@ -1,7 +1,7 @@
 import json
 import random
 
-import google.generativeai as genai
+import google.genai as genai
 import requests
 from dotenv import load_dotenv
 import os
