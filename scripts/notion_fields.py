@@ -42,6 +42,9 @@ FAVORITES = "Favorites"
 VIEWS_SINCE_SYNC = "Views Since Last Sync"
 FAVORITES_SINCE_SYNC = "Favorites Since Last Sync"
 STATS_UPDATED = "Stats Updated"
+BRIEF_ID = "Brief ID"
+THEME_ID = "Theme ID"
+RUN_ID = "Run ID"
 
 # Pipeline status values — in order of progression
 STATUS_PROMPT_UNREVIEWED = "Prompt Unreviewed"

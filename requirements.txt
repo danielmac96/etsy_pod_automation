@@ -6,3 +6,4 @@ pydantic>=2.0.0
 python-dotenv==1.0.1
 notion-client==2.2.1
 fal-client
+pytest>=8.0.0

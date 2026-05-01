@@ -7,8 +7,11 @@ import requests
 from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(PROJECT_ROOT))
 import notion_fields as nf
+from src import db as pod_db
 
 load_dotenv()
 
@@ -16,9 +19,13 @@ PRINTIFY_KEY = os.environ["PRINTIFY_API_KEY"]
 SHOP_ID = os.environ["PRINTIFY_SHOP_ID"]
 NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 DB_ID = os.environ["NOTION_DATABASE_ID"]
+DB_PATH = os.environ.get("POD_DB_PATH", "pod.db")
 
 pfy_headers = {"Authorization": f"Bearer {PRINTIFY_KEY}", "Content-Type": "application/json"}
 notion_headers = nf.notion_headers(NOTION_TOKEN)
+
+conn = pod_db.connect(DB_PATH)
+pod_db.run_migrations(conn)
 
 resp = requests.post(
     f"https://api.notion.com/v1/databases/{DB_ID}/query",
@@ -142,8 +149,17 @@ for page in candidates:
         },
     )
     patch.raise_for_status()
+    brief_id = nf.rich_text_plain(props.get(nf.BRIEF_ID, {})) or None
+    lineage_kwargs = {"printify_draft_url": draft_url}
+    if brief_id:
+        lineage_kwargs["brief_id"] = brief_id
+    if img_url:
+        lineage_kwargs["image_url"] = img_url
+    pod_db.lineage_upsert(conn, page["id"], **lineage_kwargs)
     drafts_created += 1
     print(f"Draft created: {draft_url}")
+
+conn.close()
 
 # Write final notify context for 05_notify.py
 with open("notify_context.json", "w") as f:

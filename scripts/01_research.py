@@ -1,6 +1,14 @@
-"""
-Market research pipeline: Gemini themes → Etsy listing data → ranked design briefs.
-Outputs design_briefs.json consumed by 02_generate_prompts.py.
+"""Research orchestrator: themes → probes → mining → concepts → briefs.
+
+Reads feedback from pod.db (cold-start sentinel on first run), generates
+themes via Gemini, probes Etsy on dual sort modes, mines saturation/volume
+signals, asks Gemini to extract differentiated concepts per theme, then ranks
+across themes into the final brief list. Persists every stage into pod.db so
+the chain themes → concepts → design_briefs → lineage → listing_stats stays
+unbroken.
+
+Outputs `design_briefs.json` (consumed by 02_generate_prompts.py) plus
+`runs/<run_id>/{design_briefs.json, research_summary.md, raw/}` for audit.
 """
 from __future__ import annotations
 
@@ -10,30 +18,38 @@ import os
 import random
 import sys
 import uuid
-from collections import Counter
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
-from statistics import median
 
 from dotenv import load_dotenv
 from google import genai
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from etsy_client import EtsyClient
 from gemini_client import generate_json
-from schemas import DesignBrief, DesignBriefContent, Evidence, ResearchRun
+from schemas import (
+    DesignBrief, DesignBriefContent, Evidence, ResearchRun,
+)
+from src import db
+from src.research import concepts as concept_mod
+from src.research import probes as probe_mod
+from src.research import synthesis as synth_mod
+from src.research import themes as theme_mod
+from src.research.feedback import format_feedback_for_gemini, load_feedback_signal
+from src.research.mining import mine_theme
 
 load_dotenv()
 
 # ── config ────────────────────────────────────────────────────────────────────
 N_THEMES = 6
-PROBES_PER_THEME = 3          # 1 broad + 2 narrow per theme
-LISTINGS_PER_PROBE = 50
-TOP_LISTINGS_FOR_MINING = 20  # top by favorites used for signal extraction
+LISTINGS_PER_PROBE_DEFAULT = 50
 FINAL_BRIEF_COUNT = 10
-CACHE_TTL_HOURS = 24
+DEDUP_THRESHOLD = theme_mod.DEDUP_THRESHOLD
 
 BRAND_VOICE = (
     "gym/corporate culture graphic tees — sardonic, meme-aware, relatable. "
@@ -52,8 +68,15 @@ CATEGORIES = [
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
-parser.add_argument("--dry-run", action="store_true", help="Use cached Etsy data only")
-parser.add_argument("--seed", type=int, default=None, help="Random seed")
+parser.add_argument("--dry-run", action="store_true",
+                    help="No HTTP — Gemini still runs but Etsy results come from cache or are empty.")
+parser.add_argument("--cold-start", action="store_true",
+                    help="Force cold-start (ignore existing listing_stats)")
+parser.add_argument("--seed", type=int, default=None)
+parser.add_argument("--n-themes", type=int, default=N_THEMES)
+parser.add_argument("--listings-per-probe", type=int, default=LISTINGS_PER_PROBE_DEFAULT)
+parser.add_argument("--final-count", type=int, default=FINAL_BRIEF_COUNT)
+parser.add_argument("--db-path", type=str, default="pod.db")
 args = parser.parse_args()
 
 if args.seed is not None:
@@ -63,351 +86,252 @@ if args.seed is not None:
 run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 run_dir = Path("runs") / run_id
 run_dir.mkdir(parents=True, exist_ok=True)
+raw_dir = run_dir / "raw"
+
+conn = db.connect(args.db_path)
+db.run_migrations(conn)
 
 gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+gen_fn = partial(generate_json, gemini_client, model="gemini-2.5-flash")
+
+etsy_available = bool(os.environ.get("ETSY_API_KEY"))
 etsy = EtsyClient(
     api_key=os.environ.get("ETSY_API_KEY", ""),
-    shared_secret=os.environ.get("ETSY_SHARED_SECRET", ""),
     cache_dir=run_dir / "etsy_cache",
+    rps=5.0,
 )
 
 
-def _log(name: str, prompt: str, response_text: str) -> None:
-    (run_dir / f"{name}.txt").write_text(
-        f"=== PROMPT ===\n{prompt}\n\n=== RESPONSE ===\n{response_text}\n",
-        encoding="utf-8",
-    )
+def _log(name: str, payload) -> None:
+    text = payload if isinstance(payload, str) else json.dumps(payload, indent=2, ensure_ascii=False)
+    (run_dir / f"{name}.txt").write_text(text, encoding="utf-8")
 
 
-def gemini_json(model: str, prompt: str, schema: dict, log_name: str) -> dict | list:
-    result = generate_json(gemini_client, prompt, model=model, schema=schema)
-    # log the prompt; response text is already parsed so re-serialize for the log
-    _log(log_name, prompt, json.dumps(result, ensure_ascii=False, indent=2))
-    return result
-
-
-# ── Step 1: Gemini seeds broad themes ─────────────────────────────────────────
-print(f"[01] Seeding {N_THEMES} themes via Gemini…")
-
-theme_schema = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "theme_name": {"type": "string"},
-            "description": {"type": "string"},
-            "category": {"type": "string", "enum": CATEGORIES},
-            "cultural_tension": {"type": "string"},
-        },
-        "required": ["theme_name", "description", "category", "cultural_tension"],
-    },
+# ── 1. Feedback signal ────────────────────────────────────────────────────────
+print(f"[01] Loading feedback signal (db={args.db_path})…")
+signal = load_feedback_signal(conn) if not args.cold_start else {
+    "is_cold_start": True, "weeks_analyzed": 0, "top_winning_briefs": [],
+    "underrepresented_categories": [], "winning_style_tags": [],
+    "recently_explored_themes": [],
 }
+feedback_block = format_feedback_for_gemini(signal)
+print(f"    cold_start={signal.get('is_cold_start')}, "
+      f"winners={len(signal.get('top_winning_briefs') or [])}, "
+      f"recent_themes={len(signal.get('recently_explored_themes') or [])}")
+_log("01_feedback_signal", signal)
 
-theme_prompt = f"""You are a cultural strategist for a viral Etsy apparel brand.
-
-Brand voice: {BRAND_VOICE}
-
-Brainstorm {N_THEMES} distinct micro-trend themes for this week's t-shirt designs.
-Each theme must:
-- Identify a specific cultural tension or subculture (not generic gym motivation)
-- Map to exactly ONE of these design categories: {json.dumps(CATEGORIES)}
-- Be concrete enough to generate specific Etsy search queries and shirt slogans
-- Feel fresh and meme-aware, not clichéd
-
-Examples of good themes:
-- "Hybrid athlete burnout: the person who commutes, lifts, and still does zone-2 cardio"
-- "Tech bro who CrossFits: laptop stickers and chalk-covered hands"
-- "Quarterly review as a PR attempt: performance review season mapped to gym PRs"
-
-Return a JSON array of {N_THEMES} theme objects."""
-
-themes = gemini_json("gemini-2.5-flash", theme_prompt, theme_schema, "01_themes")
-print(f"    Themes: {[t['theme_name'] for t in themes]}")
-
-# ── Step 2: Gemini generates Etsy search probes per theme ─────────────────────
-print(f"[02] Generating {PROBES_PER_THEME} search probes per theme via Gemini…")
-
-probe_schema = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "theme_name": {"type": "string"},
-            "probes": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "intent": {"type": "string", "enum": ["broad", "narrow"]},
-                    },
-                    "required": ["query", "intent"],
-                },
-            },
-        },
-        "required": ["theme_name", "probes"],
-    },
+# ── 2. Create research_run row ────────────────────────────────────────────────
+config = {
+    "n_themes": args.n_themes,
+    "listings_per_probe": args.listings_per_probe,
+    "final_brief_count": args.final_count,
+    "categories": CATEGORIES,
+    "dry_run": args.dry_run,
+    "cold_start": bool(args.cold_start or signal.get("is_cold_start")),
 }
+db.create_run(conn, run_id, config, BRAND_VOICE,
+              notes=f"cli_args={vars(args)}")
 
-probe_prompt = f"""For each theme below, generate {PROBES_PER_THEME} Etsy marketplace search queries.
-- 1 broad query (high volume signal, generic niche): e.g. "funny gym shirt"
-- 2 narrow queries (specificity signal): target the exact cultural tension of the theme
+# ── 3. Themes ─────────────────────────────────────────────────────────────────
+print(f"[02] Generating {args.n_themes} themes…")
+themes = theme_mod.generate_themes(
+    gen_fn=gen_fn,
+    n_themes=args.n_themes,
+    brand_voice=BRAND_VOICE,
+    categories=CATEGORIES,
+    feedback_signal=signal,
+    run_id=run_id,
+    feedback_block=feedback_block,
+)
+themes_kept = theme_mod.filter_unique(themes)
+dropped = [t for t in themes if t not in themes_kept]
+db.insert_themes(conn, themes)  # persist ALL incl. near-dups (notes column tells the story)
+for t in themes:
+    print(f"    [{t.category}] {t.theme_name} "
+          f"(seeded_from={t.seeded_from or '-'}; "
+          f"{'NEAR-DUP' if (t.notes or '').startswith('near_duplicate_of:') else 'unique'})")
+_log("02_themes", [vars(t) for t in themes])
 
-Themes:
-{json.dumps(themes, indent=2)}
-
-Rules:
-- Queries must be real phrases people would type into Etsy search
-- Narrow queries should surface designs directly competing with or adjacent to the theme
-- Keep queries short (2–5 words) for broad; slightly longer (3–7 words) for narrow
-
-Return a JSON array mapping each theme_name to its probes."""
-
-probe_data = gemini_json("gemini-2.5-flash", probe_prompt, probe_schema, "02_probes")
-
-# ── Step 3: Etsy API fetches real listing data ─────────────────────────────────
-from schemas import EtsyListing  # noqa: E402
-
-_etsy_available = bool(os.environ.get("ETSY_API_KEY") and os.environ.get("ETSY_SHARED_SECRET"))
-if not _etsy_available:
-    print("[03] Skipping Etsy listing fetch — ETSY_SHARED_SECRET not set. Briefs will be Gemini-only.")
-else:
-    print("[03] Fetching Etsy listing data…")
-
-theme_listings: dict[str, list[EtsyListing]] = {}
-for entry in probe_data:
-    theme_name = entry["theme_name"]
-    all_listings: list[EtsyListing] = []
-    if not _etsy_available:
-        theme_listings[theme_name] = []
+# ── 4. Probes ─────────────────────────────────────────────────────────────────
+print(f"[03] Generating + running probes for {len(themes_kept)} unique themes…")
+theme_listings: dict[str, list] = {}
+probe_count = 0
+for theme in themes_kept:
+    probes = probe_mod.generate_probes(gen_fn=gen_fn, theme=theme)
+    if not probes:
+        theme_listings[theme.theme_id] = []
         continue
-    for probe in entry.get("probes", []):
-        query = probe["query"]
-        intent = probe["intent"]
-        if args.dry_run:
-            import hashlib
-            key = hashlib.md5(f"{query}|{LISTINGS_PER_PROBE}|score".encode()).hexdigest()
-            cached = etsy._load_cache(key)
-            listings = [EtsyListing(**x) for x in cached] if cached else []
-            print(f"    [dry-run] {intent} '{query}': {len(listings)} cached listings")
-        else:
-            try:
-                listings = etsy.search_listings(query, limit=LISTINGS_PER_PROBE)
-                print(f"    {intent} '{query}': {len(listings)} listings")
-            except Exception as e:
-                print(f"    {intent} '{query}': FAILED ({e}) — skipping")
-                listings = []
-        all_listings.extend(listings)
-    theme_listings[theme_name] = all_listings
-
-# ── Step 4: Mine the data ──────────────────────────────────────────────────────
-print("[04] Mining listing data…")
-
-
-def mine_theme(listings: list[EtsyListing]) -> dict:
-    sorted_by_favs = sorted(listings, key=lambda x: x.num_favorers, reverse=True)
-    top = sorted_by_favs[:TOP_LISTINGS_FOR_MINING]
-
-    # tag frequency
-    tag_counter: Counter = Counter()
-    for listing in top:
-        tag_counter.update(t.lower() for t in listing.tags)
-    top_tags = [tag for tag, _ in tag_counter.most_common(15)]
-
-    # price tier (USD only, exclude outliers)
-    prices = [l.price_usd for l in listings if l.price_usd and 5 <= l.price_usd <= 80]
-    if prices:
-        med = median(prices)
-        p25 = sorted(prices)[len(prices) // 4]
-        p75 = sorted(prices)[3 * len(prices) // 4]
-        price_tier = [round(p25, 2), round(p75, 2)]
-        price_median = round(med, 2)
-    else:
-        price_tier = []
-        price_median = None
-
-    # saturation signal
-    total = len(listings)
-    if total >= 40:
-        saturation = "high"
-    elif total >= 20:
-        saturation = "medium"
-    else:
-        saturation = "low"
-
-    # volume signal (from top favorites count)
-    top_favs = top[0].num_favorers if top else 0
-    if top_favs >= 100:
-        volume = "high"
-    elif top_favs >= 20:
-        volume = "medium"
-    else:
-        volume = "low"
-
-    supporting = [
-        {"title": l.title, "favorites": l.num_favorers, "url": l.url}
-        for l in top[:5]
-    ]
-
-    return {
-        "top_tags": top_tags,
-        "price_tier": price_tier,
-        "price_median": price_median,
-        "saturation": saturation,
-        "volume_signal": volume,
-        "listing_count": total,
-        "supporting_listings": supporting,
-    }
-
-
-mining_results: dict[str, dict] = {}
-for t in themes:
-    name = t["theme_name"]
-    listings = theme_listings.get(name, [])
-    mining_results[name] = mine_theme(listings)
-    m = mining_results[name]
-    print(f"    {name}: {m['listing_count']} listings, sat={m['saturation']}, vol={m['volume_signal']}, tags={m['top_tags'][:5]}")
-
-# ── Step 5: Feed mined data back to Gemini for brief synthesis ─────────────────
-print(f"[05] Synthesizing {FINAL_BRIEF_COUNT} design briefs via Gemini…")
-
-brief_schema = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "concept_name": {"type": "string"},
-            "category": {"type": "string", "enum": CATEGORIES},
-            "evidence": {
-                "type": "object",
-                "properties": {
-                    "etsy_tag_overlap": {"type": "array", "items": {"type": "string"}},
-                    "search_volume_signal": {"type": "string", "enum": ["high", "medium", "low"]},
-                    "saturation": {"type": "string", "enum": ["high", "medium", "low"]},
-                    "supporting_listings": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title": {"type": "string"},
-                                "favorites": {"type": "integer"},
-                                "url": {"type": "string"},
-                            },
-                        },
-                    },
-                    "price_tier_usd": {"type": "array", "items": {"type": "number"}},
-                },
-            },
-            "design_brief": {
-                "type": "object",
-                "properties": {
-                    "headline_text": {"type": "string"},
-                    "visual_concept": {"type": "string"},
-                    "style_tags": {"type": "array", "items": {"type": "string"}},
-                    "color_palette_hint": {"type": "string"},
-                    "target_buyer": {"type": "string"},
-                },
-                "required": ["headline_text", "visual_concept", "style_tags", "color_palette_hint", "target_buyer"],
-            },
-            "image_prompt_seed": {"type": "string"},
-        },
-        "required": ["concept_name", "category", "evidence", "design_brief", "image_prompt_seed"],
-    },
-}
-
-# Build concise market signal summary for prompt
-market_summary = []
-for t in themes:
-    name = t["theme_name"]
-    m = mining_results[name]
-    market_summary.append({
-        "theme": name,
-        "category": t["category"],
-        "cultural_tension": t["cultural_tension"],
-        "top_etsy_tags": m["top_tags"][:10],
-        "saturation": m["saturation"],
-        "volume_signal": m["volume_signal"],
-        "price_tier_usd": m["price_tier"],
-        "top_listings": m["supporting_listings"][:3],
-    })
-
-synthesis_prompt = f"""You are a creative director for a viral Etsy apparel brand.
-
-Brand voice: {BRAND_VOICE}
-
-Below is real Etsy market research data for {N_THEMES} themes. Use it to produce exactly {FINAL_BRIEF_COUNT} ranked design briefs.
-
-Ranking criteria (in order):
-1. HIGH or MEDIUM volume signal + LOW or MEDIUM saturation = best opportunity
-2. Originality: concept must feel fresh, not a copy of existing titles
-3. Voice fit: sardonic, meme-aware — never earnest gym-bro motivation
-4. Image generation feasibility: the visual concept must work as a flat vector tee graphic
-
-Market data:
-{json.dumps(market_summary, indent=2)}
-
-For each brief:
-- concept_name: catchy 2–5 word name for the design concept
-- category: one of {CATEGORIES}
-- evidence: cite actual tags and listings from the data above
-- design_brief.headline_text: the EXACT text that appears on the shirt (punchy, ≤8 words)
-- design_brief.visual_concept: describe the graphic surrounding/supporting the text
-- design_brief.style_tags: ["flat vector", "bold typography", "two-color", ...]
-- design_brief.color_palette_hint: e.g. "navy + cream", "black + orange"
-- design_brief.target_buyer: one sentence describing the buyer persona
-- image_prompt_seed: a ready-to-paste prompt for Ideogram/SDXL. Must include the shirt text in quotes, art direction (flat vector, two colors, screen-print ready, pure white background)
-
-Spread briefs across multiple categories. Output the {FINAL_BRIEF_COUNT} best opportunities."""
-
-raw_briefs = gemini_json("gemini-2.5-flash", synthesis_prompt, brief_schema, "05_briefs")
-
-# ── Step 6: Assemble and write outputs ────────────────────────────────────────
-print("[06] Writing outputs…")
-
-briefs: list[DesignBrief] = []
-for rank, raw in enumerate(raw_briefs[:FINAL_BRIEF_COUNT], start=1):
-    ev = raw.get("evidence", {})
-    db = raw.get("design_brief", {})
-    briefs.append(
-        DesignBrief(
-            concept_id=str(uuid.uuid4()),
-            concept_name=raw["concept_name"],
-            rank=rank,
-            category=raw["category"],
-            evidence=Evidence(
-                etsy_tag_overlap=ev.get("etsy_tag_overlap", []),
-                search_volume_signal=ev.get("search_volume_signal", "unknown"),
-                saturation=ev.get("saturation", "unknown"),
-                supporting_listings=ev.get("supporting_listings", []),
-                price_tier_usd=ev.get("price_tier_usd", []),
-            ),
-            design_brief=DesignBriefContent(
-                headline_text=db.get("headline_text", ""),
-                visual_concept=db.get("visual_concept", ""),
-                style_tags=db.get("style_tags", []),
-                color_palette_hint=db.get("color_palette_hint", ""),
-                target_buyer=db.get("target_buyer", ""),
-            ),
-            image_prompt_seed=raw.get("image_prompt_seed", ""),
-        )
+    if not etsy_available and not args.dry_run:
+        print(f"    [skip] no ETSY_API_KEY — theme {theme.theme_name!r} has no listings")
+        for p in probes:
+            for sort_on in ("score", "created"):
+                pid = str(uuid.uuid4())
+                db.insert_probe(conn, db.EtsyProbe(
+                    probe_id=pid, theme_id=theme.theme_id, query=p["query"],
+                    intent=p.get("intent") or "broad", sort_on=sort_on,
+                    listings_returned=0, cache_hit=False,
+                ))
+        theme_listings[theme.theme_id] = []
+        continue
+    rows_per_probe = probe_mod.run_probes(
+        etsy_client=etsy, theme=theme, probes=probes,
+        listings_per_probe=args.listings_per_probe,
     )
+    for probe_row, rows in rows_per_probe:
+        db.insert_probe(conn, probe_row)
+        if rows:
+            db.insert_listings(conn, rows)
+        probe_count += 1
+        print(f"    [{theme.theme_name[:28]:28s}] "
+              f"{probe_row.intent:6s} sort={probe_row.sort_on:7s} "
+              f"q={probe_row.query!r:30s} → {probe_row.listings_returned} "
+              f"{'(cache)' if probe_row.cache_hit else ''}")
+    probe_mod.write_raw_responses(rows_per_probe, raw_dir)
+    theme_listings[theme.theme_id] = probe_mod.deduplicate_listings(rows_per_probe)
+
+print(f"    fired {probe_count} probes total")
+
+# ── 5. Mining ─────────────────────────────────────────────────────────────────
+print("[04] Mining theme landscapes…")
+theme_mining: dict[str, dict] = {}
+for theme in themes_kept:
+    listings = theme_listings.get(theme.theme_id, [])
+    m = mine_theme(listings)
+    theme_mining[theme.theme_id] = m
+    print(f"    [{theme.theme_name[:32]:32s}] n={m['n_listings']:3d} "
+          f"sat={m['saturation']:6s} vol={m['volume_signal']:6s} "
+          f"score={m['composite_score']:.3f}")
+_log("04_mining", {tid: theme_mining[tid] for tid in theme_mining})
+
+# ── 6. Concepts (per theme) ───────────────────────────────────────────────────
+print("[05] Extracting concepts per theme…")
+all_concepts: list = []
+for theme in themes_kept:
+    listings = theme_listings.get(theme.theme_id, [])
+    if not listings:
+        print(f"    [{theme.theme_name[:40]}] skipped (no listings)")
+        continue
+    cs = concept_mod.extract_concepts(
+        gen_fn=gen_fn, theme=theme, listings=listings,
+        mining=theme_mining[theme.theme_id],
+    )
+    all_concepts.extend(cs)
+    db.insert_concepts(conn, cs)
+    print(f"    [{theme.theme_name[:32]:32s}] +{len(cs)} concepts")
+
+if not all_concepts:
+    print("[!] No concepts extracted (likely no Etsy data). Aborting before synthesis.")
+    db.finish_run(conn, run_id)
+    sys.exit(2)
+
+# ── 7. Synthesis (cross-theme ranking) ────────────────────────────────────────
+print(f"[06] Synthesizing top {args.final_count} briefs across themes…")
+brief_rows = synth_mod.synthesize_briefs(
+    gen_fn=gen_fn,
+    run_id=run_id,
+    themes=themes_kept,
+    concepts=all_concepts,
+    theme_mining=theme_mining,
+    feedback_signal=signal,
+    brand_voice=BRAND_VOICE,
+    final_count=args.final_count,
+)
+db.mark_concepts_selected(conn, [b.concept_id for b in brief_rows])
+db.insert_briefs(conn, brief_rows)
+print(f"    {len(brief_rows)} briefs ranked")
+
+# ── 8. Build the JSON contract for downstream scripts ─────────────────────────
+print("[07] Writing design_briefs.json…")
+concept_by_id = {c.concept_id: c for c in all_concepts}
+theme_by_id = {t.theme_id: t for t in themes}
+
+briefs_out: list[DesignBrief] = []
+for b in brief_rows:
+    c = concept_by_id[b.concept_id]
+    t = theme_by_id[c.theme_id]
+    m = theme_mining.get(c.theme_id, {})
+    supporting = []
+    for lid in (c.evidence_listing_ids or [])[:5]:
+        # find the listing in the deduped pool
+        for L in theme_listings.get(c.theme_id, []):
+            if L.listing_id == lid:
+                supporting.append({
+                    "title": L.title, "favorites": L.num_favorers or 0,
+                    "url": L.listing_url or f"https://www.etsy.com/listing/{lid}",
+                })
+                break
+    briefs_out.append(DesignBrief(
+        brief_id=b.brief_id, concept_id=c.concept_id, theme_id=t.theme_id, run_id=run_id,
+        concept_name=c.concept_name, rank=b.rank, category=b.category,
+        evidence=Evidence(
+            etsy_tag_overlap=[tag["tag"] for tag in (m.get("top_tags") or [])[:8]],
+            search_volume_signal=str(m.get("volume_signal") or "unknown"),
+            saturation=str(m.get("saturation") or "unknown"),
+            supporting_listings=supporting,
+            price_tier_usd=[v for v in (m.get("price_p25_usd"), m.get("price_p75_usd")) if v is not None],
+        ),
+        design_brief=DesignBriefContent(
+            headline_text=b.headline_text,
+            visual_concept=b.visual_concept,
+            style_tags=list(b.style_tags or []),
+            color_palette_hint=c.color_palette_hint or "",
+            target_buyer=c.target_buyer or "",
+        ),
+        image_prompt_seed=b.image_prompt_seed,
+    ))
 
 run = ResearchRun(
     run_id=run_id,
     timestamp=datetime.now(timezone.utc).isoformat(),
-    briefs=briefs,
+    briefs=briefs_out,
 )
-
-# Primary output
-with open("design_briefs.json", "w", encoding="utf-8") as f:
-    json.dump(run.model_dump(), f, indent=2, ensure_ascii=False)
-
-# Run archive
+out_payload = run.model_dump()
+Path("design_briefs.json").write_text(
+    json.dumps(out_payload, indent=2, ensure_ascii=False), encoding="utf-8"
+)
 (run_dir / "design_briefs.json").write_text(
-    json.dumps(run.model_dump(), indent=2, ensure_ascii=False), encoding="utf-8"
+    json.dumps(out_payload, indent=2, ensure_ascii=False), encoding="utf-8"
 )
 
-print(f"\nDone. {len(briefs)} design briefs written to design_briefs.json")
-print(f"Run logs: {run_dir}/")
-for b in briefs:
+# ── 9. Research summary (markdown) ────────────────────────────────────────────
+summary_lines = [
+    f"# Research run {run_id}",
+    "",
+    f"- cold_start: **{signal.get('is_cold_start')}**",
+    f"- themes generated: {len(themes)} (kept unique: {len(themes_kept)}, "
+    f"dropped near-dups: {len(dropped)})",
+    f"- probes fired: {probe_count}",
+    f"- concepts extracted: {len(all_concepts)}",
+    f"- briefs ranked: {len(brief_rows)}",
+    "",
+    "## Feedback signal in",
+    "```",
+    feedback_block,
+    "```",
+    "",
+    "## Themes",
+]
+for t in themes:
+    flag = " (NEAR-DUP)" if (t.notes or "").startswith("near_duplicate_of:") else ""
+    summary_lines.append(f"- **[{t.category}] {t.theme_name}**{flag}  ")
+    summary_lines.append(f"  tension: {t.cultural_tension}  ")
+    summary_lines.append(f"  seeded_from: `{t.seeded_from or '-'}`  parent: `{t.parent_brief_id or '-'}`")
+
+summary_lines += ["", "## Briefs (ranked)"]
+for b in brief_rows:
+    c = concept_by_id[b.concept_id]
+    summary_lines.append(
+        f"{b.rank}. **[{b.category}] {c.concept_name}** — "
+        f"\"{b.headline_text}\" (composite={b.composite_score})"
+    )
+(run_dir / "research_summary.md").write_text(
+    "\n".join(summary_lines), encoding="utf-8"
+)
+
+db.finish_run(conn, run_id)
+conn.close()
+
+print(f"\nDone. {len(briefs_out)} briefs → design_briefs.json")
+print(f"Run artifacts: {run_dir}/")
+for b in briefs_out:
     print(f"  #{b.rank} [{b.category}] {b.concept_name} — \"{b.design_brief.headline_text}\"")

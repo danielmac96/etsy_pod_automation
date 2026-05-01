@@ -15,11 +15,12 @@ Usage:
   python scripts/test_pipeline.py dry-run 01       # Preview keywords from Gemini+Etsy (no write)
   python scripts/test_pipeline.py dry-run 02       # Preview 1 prompt per category (no Notion write)
   python scripts/test_pipeline.py dry-run 04       # Preview copy for first Image Approved page (no write)
+  python scripts/test_pipeline.py db                # Inspect pod.db (counts + last 5 lineage/listing_stats rows)
+  python scripts/test_pipeline.py lineage <brief_id># Print theme→concept→brief→lineage→stats chain for a brief
 """
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -27,7 +28,9 @@ import requests
 from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(PROJECT_ROOT))
 import notion_fields as nf
 
 load_dotenv()
@@ -41,11 +44,11 @@ W = 64
 
 def section(title: str):
     pad = max(W - len(title) - 6, 2)
-    print(f"\n\033[1m{'─' * 3} {title} {'─' * pad}\033[0m")
+    print(f"\n\033[1m{'-' * 3} {title} {'-' * pad}\033[0m")
 
-def ok(msg):   print(f"  \033[32m✓\033[0m  {msg}")
-def warn(msg): print(f"  \033[33m⚠\033[0m  {msg}")
-def fail(msg): print(f"  \033[31m✗\033[0m  {msg}")
+def ok(msg):   print(f"  \033[32m[OK]\033[0m  {msg}")
+def warn(msg): print(f"  \033[33m[!]\033[0m  {msg}")
+def fail(msg): print(f"  \033[31m[X]\033[0m  {msg}")
 def info(msg): print(f"     {msg}")
 def blank():   print()
 
@@ -283,6 +286,7 @@ def validate_step(step: str):
         blank()
         _env_check("GEMINI_API_KEY")
         _env_check("ETSY_API_KEY", required=False)
+        _env_check("ETSY_SHARED_SECRET", required=False)
 
     elif step == "02":
         p = Path("keywords.json")
@@ -385,97 +389,98 @@ def validate_step(step: str):
 # ── dry-run previews ───────────────────────────────────────────────────────────
 
 def dry_run_01():
-    """Preview keyword generation — calls Gemini and Etsy but does not write keywords.json."""
-    section("DRY RUN: 01_research.py — keyword preview  (no file writes)")
+    """Preview theme + Etsy listing data — does not write design_briefs.json."""
+    section("DRY RUN: 01_research.py - theme + Etsy preview  (no file writes)")
 
     import random
-    import google.generativeai as genai
+    from google import genai as _genai
+    from gemini_client import generate_json
+    from etsy_client import EtsyClient
 
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         fail("GEMINI_API_KEY not set")
         return
 
-    SEED_KEYWORDS = [
-        "gym before work grind", "corporate burnout weightlifting",
-        "deadlift then spreadsheets", "office worker gains",
-        "9 to 5 then 5 to 9 gym", "barbell therapy",
-        "powerlifter in a suit", "corporate drone lifts heavy",
-        "meetings and macros", "caffeine and creatine",
-        "work hard lift harder", "burnout and barbells",
+    gemini = _genai.Client(api_key=api_key)
+
+    SEED_THEMES = [
+        "hybrid athlete burnout", "tech bro who CrossFits",
+        "quarterly review as a PR attempt", "deload week is a meeting",
+        "spreadsheets and squats", "commute as pre-workout",
     ]
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    prompt = f"""You are a creative director for a gym/corporate culture apparel brand (sardonic, meme-aware).
 
-    prompt = f"""You are a creative director for a gym/corporate culture apparel brand.
+Brainstorm 5 fresh micro-trend theme names for t-shirt designs — concrete cultural tensions, not generic gym motivation.
+Examples: {json.dumps(random.sample(SEED_THEMES, 4))}
 
-Example keywords that capture the brand voice:
-{json.dumps(random.sample(SEED_KEYWORDS, 6), indent=2)}
+Return ONLY a JSON array of 5 theme name strings."""
 
-Generate 10 NEW keyword phrases in the same style:
-- Short (2-5 words), sardonic, meme-aware
-- Captures the tension between office life and gym culture
-- No repeats of the examples
+    info("Calling Gemini for sample themes...")
+    themes = generate_json(gemini, prompt)
+    blank()
+    ok(f"Gemini returned {len(themes)} sample themes  (not written to design_briefs.json)")
+    blank()
+    for t in themes:
+        info(f"  [theme]  {t}")
 
-Return ONLY a JSON array of strings, no explanation."""
-
-    info("Calling Gemini gemini-2.5-flash...")
-    resp  = model.generate_content(prompt)
-    raw   = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    kws   = json.loads(re.search(r"\[.*\]", raw, re.DOTALL).group())
+    etsy_key    = os.environ.get("ETSY_API_KEY", "")
+    etsy_secret = os.environ.get("ETSY_SHARED_SECRET", "")
 
     blank()
-    ok(f"Gemini returned {len(kws)} keywords  (not written to keywords.json)")
-    blank()
-    for kw in kws:
-        info(f"  [gemini]  {kw}")
+    if not etsy_key:
+        warn("ETSY_API_KEY not set — Etsy listing preview skipped")
+        return
+    if not etsy_secret:
+        warn("ETSY_SHARED_SECRET not set — Etsy listing data requires key:secret format")
+        warn("Get your shared secret from etsy.com/developers/your-apps")
+        return
 
-    etsy_key = os.environ.get("ETSY_API_KEY", "")
-    if etsy_key:
+    info("Fetching top Etsy listings for 'gym shirt funny'...")
+    try:
+        etsy = EtsyClient(
+            api_key=etsy_key,
+            shared_secret=etsy_secret,
+            cache_dir=Path("runs/dry_run_cache"),
+        )
+        listings = etsy.search_listings("gym shirt funny", limit=5)
         blank()
-        info("Etsy suggested searches for 'gym shirt funny':")
-        try:
-            r = requests.get(
-                "https://openapi.etsy.com/v3/application/suggested-searches",
-                headers={"x-api-key": etsy_key},
-                params={"q": "gym shirt funny", "limit": 8},
-                timeout=10,
-            )
-            r.raise_for_status()
-            suggestions = [e.get("query", "") for e in r.json().get("results", []) if e.get("query")]
-            for s in suggestions:
-                info(f"  [etsy]    {s}")
-        except Exception as e:
-            warn(f"Etsy call failed: {e}")
-    else:
-        warn("ETSY_API_KEY not set — Etsy suggestions skipped")
+        ok(f"{len(listings)} listings returned  (not cached to design_briefs.json)")
+        blank()
+        for l in listings:
+            info(f"  favs={l.num_favorers:<5}  {l.title[:70]}")
+            if l.tags:
+                info(f"           tags: {', '.join(l.tags[:6])}")
+    except Exception as e:
+        warn(f"Etsy call failed: {e}")
 
 
 def dry_run_02():
     """Preview one prompt per category from Gemini — does not write to Notion or prompts.json."""
     section("DRY RUN: 02_generate_prompts.py — 1 prompt per category  (no Notion writes)")
 
-    import google.generativeai as genai
+    from google import genai as _genai
+    from gemini_client import generate_json
 
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         fail("GEMINI_API_KEY not set")
         return
 
-    kw_path = Path("keywords.json")
-    if not kw_path.exists():
-        fail("keywords.json not found — run 01_research.py first")
-        return
+    briefs_path = Path("design_briefs.json")
+    kw_context = ""
+    if briefs_path.exists():
+        try:
+            run = json.loads(briefs_path.read_text(encoding="utf-8"))
+            briefs = run.get("briefs", [])
+            if briefs:
+                samples = [f'"{b["design_brief"]["headline_text"]}"' for b in briefs[:4]]
+                kw_context = f"\nMarket-researched concepts this week: {', '.join(samples)}"
+        except Exception:
+            pass
 
-    raw_keywords = json.loads(kw_path.read_text())
-    if raw_keywords and isinstance(raw_keywords[0], dict):
-        all_keywords = [k["keyword"] for k in raw_keywords]
-    else:
-        all_keywords = raw_keywords
-
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    gemini = _genai.Client(api_key=api_key)
 
     CATEGORIES = {
         "Corporate Grind":   "Office frustration, meetings, burnout — gym as the only escape valve",
@@ -493,23 +498,17 @@ def dry_run_02():
         prompt = f"""You are a witty copywriter for a viral Etsy shop selling gym + corporate culture graphic tees.
 
 Category: {category}
-Theme: {description}
-Keywords: {json.dumps(all_keywords[:10])}
+Theme: {description}{kw_context}
 
 Generate 1 image generation prompt for a screen-print t-shirt in the "{category}" category.
 Must include: a specific joke or relatable moment, the shirt slogan in quotes, and art direction
 (flat vector, bold typography, two colors, screen print ready, pure white background).
 
-Return ONLY a single JSON string, no explanation."""
+Return ONLY a JSON string (a single string, not an array)."""
 
-        resp = model.generate_content(prompt)
-        raw  = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        try:
-            result = json.loads(raw)
-            if isinstance(result, list):
-                result = result[0]
-        except Exception:
-            result = raw.strip('"')
+        result = generate_json(gemini, prompt)
+        if isinstance(result, list):
+            result = result[0]
 
         print(f"     \033[1m[{category}]\033[0m")
         info(result)
@@ -520,7 +519,8 @@ def dry_run_04():
     """Preview AI copy for the first Image Approved page — does not write to Notion."""
     section("DRY RUN: 04_generate_copy.py — copy preview  (no Notion writes)")
 
-    import google.generativeai as genai
+    from google import genai as _genai
+    from gemini_client import generate_json
 
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
@@ -556,8 +556,7 @@ def dry_run_04():
     info(f"Prompt     : {prompt_text[:100]}...")
     blank()
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    gemini = _genai.Client(api_key=api_key)
 
     gemini_prompt = f"""You are an Etsy SEO copywriter for a gym + corporate culture graphic tee shop.
 
@@ -571,11 +570,8 @@ Write Etsy product copy. Return a JSON object with exactly these keys:
 
 Return ONLY valid JSON, no explanation, no markdown."""
 
-    info("Calling Gemini gemini-2.5-flash...")
-    resp  = model.generate_content(gemini_prompt)
-    raw   = resp.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    data  = json.loads(match.group())
+    info("Calling Gemini...")
+    data = generate_json(gemini, gemini_prompt)
 
     blank()
     ok(f"Title  ({len(data.get('title', ''))} chars):")
@@ -597,11 +593,181 @@ USAGE = """
   python scripts/test_pipeline.py                  full report (files + Notion)
   python scripts/test_pipeline.py files            checkpoint file status only
   python scripts/test_pipeline.py notion           Notion DB state only
-  python scripts/test_pipeline.py validate <N>     check inputs for step N  (01–07)
+  python scripts/test_pipeline.py db               pod.db row counts + last runs + last 5 lineage/listing_stats
+  python scripts/test_pipeline.py lineage <brief>  full theme→concept→brief→lineage→stats chain for a brief_id
+  python scripts/test_pipeline.py validate <N>     check inputs for step N  (01-07)
   python scripts/test_pipeline.py dry-run  01      preview keyword generation
   python scripts/test_pipeline.py dry-run  02      preview 1 prompt per category
   python scripts/test_pipeline.py dry-run  04      preview copy for first Image Approved page
 """
+
+
+def db_state():
+    """Show pod.db schema status, row counts per table, last 3 runs, and feedback signal."""
+    from src import db as _db
+
+    section("POD.DB STATE")
+    db_path = Path(os.environ.get("POD_DB_PATH") or (PROJECT_ROOT / "pod.db"))
+    info(f"Path: {db_path}")
+    conn = _db.connect(db_path)
+    applied = _db.run_migrations(conn)
+    if applied:
+        ok(f"Applied migrations: {', '.join(applied)}")
+    else:
+        ok("Schema up to date (no new migrations)")
+    blank()
+
+    section("ROW COUNTS")
+    tables = [
+        "research_runs", "themes", "etsy_probes", "etsy_listings",
+        "concepts", "design_briefs", "lineage", "listing_stats",
+        "schema_migrations",
+    ]
+    for t in tables:
+        n = conn.execute(f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"]
+        info(f"{t:<22} {n}")
+    blank()
+
+    section("LAST 3 research_runs")
+    rows = list(conn.execute(
+        "SELECT run_id, started_at, finished_at, brand_voice "
+        "FROM research_runs ORDER BY started_at DESC LIMIT 3"
+    ))
+    if not rows:
+        info("(none)")
+    for r in rows:
+        info(f"{r['run_id']}  started={r['started_at']}  finished={r['finished_at'] or '-'}  voice={r['brand_voice']}")
+    blank()
+
+    section("FEEDBACK SIGNAL")
+    sig = _db.load_feedback_signal(conn)
+    print(json.dumps(sig, indent=2, default=str))
+    blank()
+
+    section("LAST 5 lineage rows")
+    rows = list(conn.execute(
+        "SELECT notion_page_id, brief_id, image_url, printify_draft_url, "
+        "etsy_listing_url, last_updated_at "
+        "FROM lineage ORDER BY last_updated_at DESC LIMIT 5"
+    ))
+    if not rows:
+        info("(none)")
+    for r in rows:
+        info(
+            f"page={r['notion_page_id'][:8]}.. "
+            f"brief={(r['brief_id'] or '-')[:8]}.. "
+            f"img={'Y' if r['image_url'] else '-'} "
+            f"draft={'Y' if r['printify_draft_url'] else '-'} "
+            f"etsy={'Y' if r['etsy_listing_url'] else '-'} "
+            f"updated={r['last_updated_at']}"
+        )
+    blank()
+
+    section("LAST 5 listing_stats rows")
+    rows = list(conn.execute(
+        "SELECT notion_page_id, snapshot_at, views, favorites, "
+        "views_delta, favorites_delta "
+        "FROM listing_stats ORDER BY snapshot_at DESC, snapshot_id DESC LIMIT 5"
+    ))
+    if not rows:
+        info("(none)")
+    for r in rows:
+        vd = "—" if r["views_delta"] is None else f"+{r['views_delta']}"
+        fd = "—" if r["favorites_delta"] is None else f"+{r['favorites_delta']}"
+        info(
+            f"page={r['notion_page_id'][:8]}.. at={r['snapshot_at']} "
+            f"views={r['views']} ({vd}) favs={r['favorites']} ({fd})"
+        )
+
+    conn.close()
+
+
+def lineage_chain(brief_id: str) -> None:
+    """Print the full theme → concept → brief → lineage → stats chain for a brief_id."""
+    from src import db as _db
+
+    section(f"LINEAGE for brief_id={brief_id}")
+    db_path = Path(os.environ.get("POD_DB_PATH") or (PROJECT_ROOT / "pod.db"))
+    info(f"Path: {db_path}")
+    conn = _db.connect(db_path)
+
+    brief = conn.execute(
+        "SELECT b.brief_id, b.run_id, b.concept_id, b.rank, b.category, "
+        "b.headline_text, b.composite_score, b.created_at "
+        "FROM design_briefs b WHERE b.brief_id = ?",
+        (brief_id,),
+    ).fetchone()
+    if not brief:
+        fail(f"No design_briefs row with brief_id={brief_id}")
+        conn.close()
+        return
+
+    concept = conn.execute(
+        "SELECT concept_id, theme_id, concept_name, headline_text "
+        "FROM concepts WHERE concept_id = ?",
+        (brief["concept_id"],),
+    ).fetchone()
+    theme = conn.execute(
+        "SELECT theme_id, run_id, theme_name, category, cultural_tension, "
+        "seeded_from, parent_brief_id "
+        "FROM themes WHERE theme_id = ?",
+        (concept["theme_id"] if concept else None,),
+    ).fetchone() if concept else None
+    run = conn.execute(
+        "SELECT run_id, started_at, finished_at FROM research_runs WHERE run_id = ?",
+        (brief["run_id"],),
+    ).fetchone()
+
+    blank()
+    section("RUN")
+    if run:
+        info(f"run_id={run['run_id']}  started={run['started_at']}  finished={run['finished_at'] or '-'}")
+    section("THEME")
+    if theme:
+        info(f"theme_id={theme['theme_id']}")
+        info(f"name=[{theme['category']}] {theme['theme_name']}")
+        info(f"tension={theme['cultural_tension']}")
+        info(f"seeded_from={theme['seeded_from'] or '-'}  parent_brief_id={theme['parent_brief_id'] or '-'}")
+    section("CONCEPT")
+    if concept:
+        info(f"concept_id={concept['concept_id']}")
+        info(f"name={concept['concept_name']}")
+        info(f"headline={concept['headline_text']}")
+    section("BRIEF")
+    info(f"brief_id={brief['brief_id']}  rank={brief['rank']}  composite={brief['composite_score']}")
+    info(f"category={brief['category']}  headline={brief['headline_text']}")
+    info(f"created_at={brief['created_at']}")
+
+    section("LINEAGE rows referencing this brief")
+    rows = list(conn.execute(
+        "SELECT notion_page_id, prompt_text, image_url, printify_draft_url, "
+        "etsy_listing_url, last_updated_at "
+        "FROM lineage WHERE brief_id = ? ORDER BY last_updated_at DESC",
+        (brief_id,),
+    ))
+    if not rows:
+        info("(none — brief never made it to a Notion page)")
+    for r in rows:
+        info(f"page={r['notion_page_id']}")
+        info(f"  prompt={(r['prompt_text'] or '')[:80]}")
+        info(f"  image={r['image_url'] or '-'}")
+        info(f"  printify={r['printify_draft_url'] or '-'}")
+        info(f"  etsy={r['etsy_listing_url'] or '-'}  updated={r['last_updated_at']}")
+
+        stats = list(conn.execute(
+            "SELECT snapshot_at, views, favorites, views_delta, favorites_delta "
+            "FROM listing_stats WHERE notion_page_id = ? "
+            "ORDER BY snapshot_at DESC LIMIT 5",
+            (r["notion_page_id"],),
+        ))
+        if not stats:
+            info("  stats: (none yet)")
+        for s in stats:
+            vd = "—" if s["views_delta"] is None else f"+{s['views_delta']}"
+            fd = "—" if s["favorites_delta"] is None else f"+{s['favorites_delta']}"
+            info(f"  stats {s['snapshot_at']}: views={s['views']} ({vd}) favs={s['favorites']} ({fd})")
+
+    conn.close()
 
 
 def main():
@@ -619,6 +785,15 @@ def main():
 
     elif cmd == "notion":
         notion_state()
+
+    elif cmd == "db":
+        db_state()
+
+    elif cmd == "lineage":
+        if len(args) < 2:
+            fail("Usage: test_pipeline.py lineage <brief_id>")
+        else:
+            lineage_chain(args[1])
 
     elif cmd == "validate":
         step = args[1].lstrip("0") if len(args) > 1 else ""
