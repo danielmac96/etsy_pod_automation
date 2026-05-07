@@ -10,48 +10,30 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
-import notion_fields as nf
 from src import db as pod_db
 
 load_dotenv()
 
 PRINTIFY_KEY = os.environ["PRINTIFY_API_KEY"]
 SHOP_ID = os.environ["PRINTIFY_SHOP_ID"]
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-DB_ID = os.environ["NOTION_DATABASE_ID"]
 DB_PATH = os.environ.get("POD_DB_PATH", "pod.db")
 
 pfy_headers = {"Authorization": f"Bearer {PRINTIFY_KEY}", "Content-Type": "application/json"}
-notion_headers = nf.notion_headers(NOTION_TOKEN)
 
 conn = pod_db.connect(DB_PATH)
 pod_db.run_migrations(conn)
 
-resp = requests.post(
-    f"https://api.notion.com/v1/databases/{DB_ID}/query",
-    headers=notion_headers,
-    json={
-        "filter": {
-            "and": [
-                {"property": nf.PIPELINE_STATUS, "select": {"equals": nf.STATUS_COPY_GENERATED}},
-                {"property": nf.PRINTIFY_DRAFT_URL, "url": {"is_empty": True}},
-            ]
-        }
-    },
-)
-resp.raise_for_status()
-candidates = resp.json().get("results", [])
+candidates = pod_db.lineage_pending_for_stage(conn, "draft_create")
 
 drafts_created = 0
+draft_items: list[dict] = []
 
-for page in candidates:
-    props = page["properties"]
-    etsy_title = nf.rich_text_plain(props.get(nf.ETSY_TITLE, {})).strip()
-    if not etsy_title:
-        etsy_title = nf.title_plain(props.get(nf.NAME, {})).strip() or "shirt-design"
-    img_url = nf.url_value(props.get(nf.IMAGE_URL, {})) or ""
+for row in candidates:
+    lineage_id = row["lineage_id"]
+    etsy_title = (row["etsy_title"] or "").strip() or "shirt-design"
+    img_url = row["image_url"] or ""
     if not img_url:
-        print(f"Skip page {page['id']}: missing Image URL")
+        print(f"Skip {lineage_id[:8]}: missing image_url")
         continue
 
     safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in etsy_title)[:80]
@@ -71,7 +53,6 @@ for page in candidates:
         print(f"Printify image upload missing id: {upload_body}")
         continue
 
-    # Fetch valid variants for this blueprint + provider
     variants_resp = requests.get(
         "https://api.printify.com/v1/catalog/blueprints/6/print_providers/99/variants.json",
         headers=pfy_headers,
@@ -80,7 +61,6 @@ for page in candidates:
     variants_resp.raise_for_status()
     all_variants = variants_resp.json().get("variants", [])
 
-    # Only create a small set of color + size combos
     VARIANT_WHITELIST = {
         "Black / S", "Black / M", "Black / L", "Black / XL",
         "White / S", "White / M", "White / L", "White / XL",
@@ -138,38 +118,28 @@ for page in candidates:
 
     draft_url = f"https://printify.com/app/shop/{SHOP_ID}/products/{pid}/edit"
 
-    patch = requests.patch(
-        f"https://api.notion.com/v1/pages/{page['id']}",
-        headers=notion_headers,
-        json={
-            "properties": {
-                nf.PIPELINE_STATUS: {"select": {"name": nf.STATUS_DRAFTED}},
-                nf.PRINTIFY_DRAFT_URL: {"url": draft_url},
-            }
-        },
-    )
-    patch.raise_for_status()
-    brief_id = nf.rich_text_plain(props.get(nf.BRIEF_ID, {})) or None
-    lineage_kwargs = {"printify_draft_url": draft_url}
-    if brief_id:
-        lineage_kwargs["brief_id"] = brief_id
-    if img_url:
-        lineage_kwargs["image_url"] = img_url
-    pod_db.lineage_upsert(conn, page["id"], **lineage_kwargs)
+    pod_db.lineage_upsert(conn, lineage_id, printify_draft_url=draft_url)
+    pod_db.lineage_set_draft_status(conn, lineage_id, "drafted")
     drafts_created += 1
+    draft_items.append({
+        "lineage_id": lineage_id,
+        "etsy_title": etsy_title,
+        "printify_draft_url": draft_url,
+    })
     print(f"Draft created: {draft_url}")
 
 conn.close()
 
-# Write final notify context for 05_notify.py
 with open("notify_context.json", "w") as f:
     json.dump({
         "count": drafts_created,
         "stage": "drafts",
         "detail": (
             f"{drafts_created} Printify draft(s) created from {len(candidates)} approved design(s). "
-            f"Review drafts in Printify, then publish to Etsy."
+            f"Review drafts in Printify, then publish to Etsy. "
+            f"Sunday's stats sync will auto-detect Etsy URLs by title."
         ),
+        "items": draft_items,
     }, f)
 
 print(f"\nDone. {drafts_created}/{len(candidates)} Printify drafts created.")

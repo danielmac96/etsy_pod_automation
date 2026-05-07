@@ -4,23 +4,18 @@ import sys
 from pathlib import Path
 
 from google import genai
-import requests
 from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
-import notion_fields as nf
 from gemini_client import generate_json
 from src import db
 
 load_dotenv()
 
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 DB_PATH = os.environ.get("POD_DB_PATH", "pod.db")
-notion_headers = nf.notion_headers(NOTION_TOKEN)
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
@@ -69,43 +64,43 @@ def load_design_briefs() -> tuple[dict[str, list[dict]], dict]:
     return briefs_by_category, meta
 
 
-def get_top_performers() -> list[str]:
-    try:
-        resp = requests.post(
-            f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query",
-            headers=notion_headers,
-            json={
-                "filter": {
-                    "property": nf.PIPELINE_STATUS,
-                    "select": {"equals": nf.STATUS_PUBLISHED},
-                },
-                "sorts": [{"property": nf.FAVORITES, "direction": "descending"}],
-                "page_size": 8,
-            },
+def get_top_performers(conn) -> list[str]:
+    """Pull recent winners directly from pod.db's listing_stats deltas."""
+    rows = conn.execute(
+        """
+        SELECT b.category, b.headline_text, l.prompt_text,
+               COALESCE(SUM(s.favorites_delta), 0) AS fav_total,
+               COALESCE(SUM(s.views_delta), 0)     AS views_total,
+               (SELECT favorites FROM listing_stats s2
+                  WHERE s2.lineage_id = l.lineage_id
+                  ORDER BY snapshot_at DESC LIMIT 1) AS last_favs,
+               (SELECT views     FROM listing_stats s2
+                  WHERE s2.lineage_id = l.lineage_id
+                  ORDER BY snapshot_at DESC LIMIT 1) AS last_views
+        FROM listing_stats s
+        JOIN lineage l       ON l.lineage_id = s.lineage_id
+        JOIN design_briefs b ON b.brief_id   = l.brief_id
+        WHERE s.favorites_delta IS NOT NULL
+          AND s.snapshot_at >= datetime('now', '-28 days')
+        GROUP BY l.lineage_id
+        ORDER BY fav_total DESC
+        LIMIT 8
+        """
+    ).fetchall()
+
+    lines = []
+    for r in rows[:5]:
+        text = (r["prompt_text"] or r["headline_text"] or "").strip()
+        if not text:
+            continue
+        snippet = text[:200] + ("..." if len(text) > 200 else "")
+        bit = (
+            f"- [{r['category']}] {snippet} | "
+            f"favs={r['last_favs'] or 0}, views={r['last_views'] or 0}, "
+            f"favs_delta={r['fav_total']}, views_delta={r['views_total']}"
         )
-        results = resp.json().get("results", [])
-        lines = []
-        for p in results[:5]:
-            props = p["properties"]
-            prompt = nf.rich_text_plain(props.get(nf.PROMPT, {}))
-            if not prompt.strip():
-                continue
-            cat_prop = props.get(nf.CATEGORY, {}).get("select") or {}
-            cat_name = cat_prop.get("name", "")
-            fav = int(nf.number_value(props.get(nf.FAVORITES, {})) or 0)
-            views = int(nf.number_value(props.get(nf.VIEWS, {})) or 0)
-            dv = nf.number_value(props.get(nf.VIEWS_SINCE_SYNC, {}))
-            df = nf.number_value(props.get(nf.FAVORITES_SINCE_SYNC, {}))
-            bit = f"- [{cat_name}] {prompt[:200]}{'...' if len(prompt) > 200 else ''} | favs={fav}, views={views}"
-            if dv is not None:
-                bit += f", views_delta={int(dv)}"
-            if df is not None:
-                bit += f", favs_delta={int(df)}"
-            lines.append(bit)
-        return lines
-    except Exception as e:
-        print(f"No top performers yet (first run): {e}")
-        return []
+        lines.append(bit)
+    return lines
 
 
 def _build_brief_context(briefs: list[dict]) -> str:
@@ -166,7 +161,6 @@ Return ONLY a JSON array of {PROMPTS_PER_CATEGORY} strings, no explanation."""
 
     prompts = generate_json(client, prompt)
 
-    # Pair each prompt with a brief so lineage IDs flow through.
     out: list[dict] = []
     for i, p in enumerate(prompts):
         src_brief = briefs[i % len(briefs)] if briefs else None
@@ -174,42 +168,14 @@ Return ONLY a JSON array of {PROMPTS_PER_CATEGORY} strings, no explanation."""
     return out
 
 
-def _rich(text: str) -> dict:
-    return {"rich_text": [{"text": {"content": text}}]} if text else {"rich_text": []}
-
-
-def save_prompt_to_notion(prompt_text: str, category: str, brief: dict | None) -> str | None:
-    properties: dict = {
-        nf.NAME: {"title": [{"text": {"content": prompt_text[:100]}}]},
-        nf.PROMPT: {"rich_text": [{"text": {"content": prompt_text}}]},
-        nf.CATEGORY: {"select": {"name": category}},
-        nf.PIPELINE_STATUS: {"select": {"name": nf.STATUS_PROMPT_UNREVIEWED}},
-    }
-    if brief:
-        properties[nf.BRIEF_ID] = _rich(brief.get("brief_id", ""))
-        properties[nf.THEME_ID] = _rich(brief.get("theme_id", ""))
-        properties[nf.RUN_ID] = _rich(brief.get("run_id", ""))
-    page = requests.post(
-        "https://api.notion.com/v1/pages",
-        headers=notion_headers,
-        json={
-            "parent": {"database_id": NOTION_DATABASE_ID},
-            "properties": properties,
-        },
-    ).json()
-    if "id" in page:
-        return page["id"]
-    print(f"Failed to save prompt to Notion: {page}")
-    return None
-
-
 briefs_by_category, briefs_meta = load_design_briefs()
-top_lines = get_top_performers()
-all_prompts = []
-notion_page_ids = []
 
 conn = db.connect(DB_PATH)
 db.run_migrations(conn)
+
+top_lines = get_top_performers(conn)
+all_prompts: list[dict] = []
+created_lineage_ids: list[str] = []
 
 for category, description in CATEGORIES.items():
     print(f"\n--- Generating prompts for: {category} ---")
@@ -219,37 +185,41 @@ for category, description in CATEGORIES.items():
     for pair in pairs:
         prompt_text = pair["prompt"]
         src_brief = pair["brief"]
-        page_id = save_prompt_to_notion(prompt_text, category, src_brief)
-        if page_id:
-            notion_page_ids.append(page_id)
-            if src_brief:
-                db.lineage_upsert(
-                    conn,
-                    notion_page_id=page_id,
-                    brief_id=src_brief.get("brief_id"),
-                    prompt_text=prompt_text,
-                )
-            else:
-                db.lineage_upsert(conn, notion_page_id=page_id, prompt_text=prompt_text)
-            print(f"  Saved [{category}]: {prompt_text[:80]}...")
-        all_prompts.append({"category": category, "prompt": prompt_text,
-                            "brief_id": (src_brief or {}).get("brief_id")})
+        lineage_id = db.lineage_create(
+            conn,
+            brief_id=(src_brief or {}).get("brief_id"),
+            prompt_text=prompt_text,
+            category=category,
+        )
+        created_lineage_ids.append(lineage_id)
+        all_prompts.append({
+            "lineage_id": lineage_id,
+            "category": category,
+            "prompt": prompt_text,
+            "brief_id": (src_brief or {}).get("brief_id"),
+        })
+        print(f"  Saved [{category}]: {prompt_text[:80]}...")
 
 conn.close()
 
-# Audit log
+# Audit log (consumed nowhere downstream; useful for git diffs)
 with open("prompts.json", "w") as f:
     json.dump(all_prompts, f, indent=2)
 
-# Context for 05_notify.py
+# Context for 05_notify.py — items list lets the email render a per-prompt summary table
 with open("notify_context.json", "w") as f:
     json.dump({
-        "count": len(notion_page_ids),
+        "count": len(created_lineage_ids),
         "stage": "prompts",
         "detail": (
-            f"{len(notion_page_ids)} prompts generated across {len(CATEGORIES)} categories "
+            f"{len(created_lineage_ids)} prompts generated across {len(CATEGORIES)} categories "
             f"({PROMPTS_PER_CATEGORY} per category)."
         ),
+        "items": [
+            {"lineage_id": p["lineage_id"], "category": p["category"],
+             "prompt": p["prompt"]}
+            for p in all_prompts
+        ],
     }, f)
 
-print(f"\nDone. {len(notion_page_ids)}/{len(all_prompts)} prompts saved to Notion.")
+print(f"\nDone. {len(created_lineage_ids)} prompts saved to pod.db.")

@@ -7,6 +7,8 @@ on:
 jobs:
   generate-images:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,17 +16,23 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
 
-      - name: Generate images for Prompt Approved designs
+      - name: Generate images for prompt-approved designs
         run: python scripts/03_generate_images.py
         env:
           FAL_KEY: ${{ secrets.FAL_KEY }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
 
-      - name: Send image review notification
+      - name: Send image review email
         run: python scripts/05_notify.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          LOCAL_APP_URL: ${{ vars.LOCAL_APP_URL || 'http://localhost:8501' }}
+
+      - name: Commit pod.db + image artifacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pod.db images/ || true
+          git diff --cached --quiet || git commit -m "auto: weekly images [skip ci]"
+          git push

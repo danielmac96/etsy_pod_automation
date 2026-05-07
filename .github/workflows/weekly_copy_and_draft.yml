@@ -7,6 +7,8 @@ on:
 jobs:
   copy-and-draft:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,24 +16,28 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
 
-      - name: Generate AI product copy for Image Approved designs
+      - name: Generate AI product copy for image-approved designs
         run: python scripts/04_generate_copy.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
 
-      - name: Create Printify drafts for Copy Generated designs
+      - name: Create Printify drafts
         run: python scripts/06_printify_upload.py
         env:
           PRINTIFY_API_KEY: ${{ secrets.PRINTIFY_API_KEY }}
           PRINTIFY_SHOP_ID: ${{ secrets.PRINTIFY_SHOP_ID }}
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
 
-      - name: Send draft-ready notification
+      - name: Send draft-ready email
         run: python scripts/05_notify.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          LOCAL_APP_URL: ${{ vars.LOCAL_APP_URL || 'http://localhost:8501' }}
+
+      - name: Commit pod.db
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pod.db
+          git diff --cached --quiet || git commit -m "auto: weekly copy + Printify drafts [skip ci]"
+          git push

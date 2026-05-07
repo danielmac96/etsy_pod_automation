@@ -7,6 +7,8 @@ on:
 jobs:
   research-and-prompts:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,22 +16,28 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements.txt
 
-      - name: Generate keywords (Gemini + Etsy suggestions)
+      - name: Research themes → concepts → briefs
         run: python scripts/01_research.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
 
-      - name: Generate 25 prompts across 5 categories and save to Notion
+      - name: Generate 25 prompts and save to pod.db
         run: python scripts/02_generate_prompts.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
 
-      - name: Send prompt review notification
+      - name: Send prompt review email
         run: python scripts/05_notify.py
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          LOCAL_APP_URL: ${{ vars.LOCAL_APP_URL || 'http://localhost:8501' }}
+
+      - name: Commit pod.db + design_briefs.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pod.db design_briefs.json prompts.json runs/ || true
+          git diff --cached --quiet || git commit -m "auto: weekly research + prompts [skip ci]"
+          git push
