@@ -1,0 +1,80 @@
+{
+  "count": 142,
+  "results": [
+    {
+      "listing_id": 1322910664,
+      "title": "Vader I am your Spotter Gym Shirt, Funny Weightlifting Shirts Movie Parody Tee",
+      "tags": ["gym shirt", "funny gym shirt", "spotter", "vader shirt", "gift for boyfriend", "gym t shirt", "gym shirt men", "gym shirt funny"],
+      "price": {"amount": 1099, "divisor": 100, "currency_code": "USD"},
+      "num_favorers": 80,
+      "views": 1240,
+      "shop_id": 19237001,
+      "taxonomy_id": 2078,
+      "is_digital": false,
+      "is_personalizable": false,
+      "created_timestamp": 1714000000,
+      "url": "https://www.etsy.com/listing/1322910664"
+    },
+    {
+      "listing_id": 1280922413,
+      "title": "You Create Willpower Gym Shirt: Funny Workout Tee",
+      "tags": ["gym shirt", "valentine day", "valentines for men", "gift for boyfriend", "gym shirt funny"],
+      "price": {"amount": 2495, "divisor": 100, "currency_code": "USD"},
+      "num_favorers": 1,
+      "views": 38,
+      "shop_id": 22113908,
+      "taxonomy_id": 2078,
+      "is_digital": false,
+      "is_personalizable": true,
+      "created_timestamp": 1722300000,
+      "url": "https://www.etsy.com/listing/1280922413"
+    },
+    {
+      "listing_id": 4493414764,
+      "title": "Gym Shirt Funny | Powered by Pre Workout Shirt | No Sleep Just Reps Tee",
+      "tags": ["gym shirt funny", "funny gym shirt", "gym meme shirt", "fitness shirt men", "lifting shirt", "pre workout shirt"],
+      "price": {"amount": 3599, "divisor": 100, "currency_code": "USD"},
+      "num_favorers": 0,
+      "views": 12,
+      "shop_id": 39998711,
+      "taxonomy_id": 2078,
+      "is_digital": false,
+      "is_personalizable": false,
+      "created_timestamp": 1738000000,
+      "url": "https://www.etsy.com/listing/4493414764"
+    },
+    {
+      "listing_id": 1717217665,
+      "title": "Ponte Metas Gym Shirt Funny Workout Gym T-Shirt for Men Fitness Lifting",
+      "tags": ["powerlifting shirt", "lifting shirts", "gym lover gift", "workout shirt men", "gym shirt", "weight lifting"],
+      "price": {"amount": 2495, "divisor": 100, "currency_code": "USD"},
+      "num_favorers": 1,
+      "views": 22,
+      "shop_id": 28771445,
+      "taxonomy_id": 2078,
+      "is_digital": false,
+      "is_personalizable": false,
+      "created_timestamp": 1737500000,
+      "url": "https://www.etsy.com/listing/1717217665"
+    },
+    {
+      "listing_id": 9988776655,
+      "title": "Camiseta Gimnasio Divertida — Funny Gym Tee (EUR shop)",
+      "tags": ["gym shirt", "gimnasio", "funny gym tee"],
+      "price": {"amount": 2200, "divisor": 100, "currency_code": "EUR"},
+      "num_favorers": 14,
+      "views": 211,
+      "shop_id": 41200033,
+      "taxonomy_id": 2078,
+      "is_digital": false,
+      "is_personalizable": false,
+      "created_timestamp": 1726000000,
+      "url": "https://www.etsy.com/listing/9988776655"
+    }
+  ],
+  "pagination": {
+    "effective_limit": 5,
+    "effective_offset": 0,
+    "next_offset": 5
+  }
+}

@@ -1,0 +1,30 @@
+name: Etsy stats sync (mid-week)
+on:
+  schedule:
+    - cron: '30 14 * * 3'  # Wednesdays ~9:30am EST (UTC varies)
+  workflow_dispatch:
+
+jobs:
+  sync-stats:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python scripts/07_track_stats.py
+        env:
+          ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
+          ETSY_ACCESS_TOKEN: ${{ secrets.ETSY_ACCESS_TOKEN }}
+          ETSY_SHOP_ID: ${{ secrets.ETSY_SHOP_ID }}
+
+      - name: Commit pod.db
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pod.db
+          git diff --cached --quiet || git commit -m "auto: mid-week stats sync [skip ci]"
+          git push

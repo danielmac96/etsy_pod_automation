@@ -1,0 +1,27 @@
+# secrets
+.env
+
+# python
+__pycache__/
+.pytest_cache/
+
+# generated artifacts
+images/
+runs/
+
+# sqlite sidecars (regenerated on every connection)
+pod.db-shm
+pod.db-wal
+pod.db-journal
+pod.db.pre-0002-backup
+
+# runtime / local state
+notify_context.json
+notion_ids.json
+keywords.json
+results.json
+pipeline_debug.ipynb
+
+# IDE / tooling local state
+.idea/misc.xml
+.claude/
