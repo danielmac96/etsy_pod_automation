@@ -20,6 +20,7 @@ notify_context.json
 notion_ids.json
 keywords.json
 results.json
+prompts.json
 pipeline_debug.ipynb
 
 # IDE / tooling local state

@@ -1,0 +1,266 @@
+{
+  "run_id": "20260424T031119Z",
+  "timestamp": "2026-04-24T03:12:02.000386+00:00",
+  "briefs": [
+    {
+      "concept_id": "d80dd43c-0ce9-4b43-80b4-f20d9b817033",
+      "concept_name": "Reply All Leg Day",
+      "rank": 1,
+      "category": "Corporate Grind",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "Did I email that AFTER leg day?",
+        "visual_concept": "A distressed, slightly smudged email icon with a subtle sweat drop graphic. Minimalist.",
+        "style_tags": [
+          "flat vector",
+          "distressed texture",
+          "minimalist",
+          "typography"
+        ],
+        "color_palette_hint": "Black and off-white",
+        "target_buyer": "The corporate warrior who struggles to maintain professionalism after an intense lower body workout."
+      },
+      "image_prompt_seed": "A flat vector graphic of an email icon with a single sweat drop, screen-print ready, two colors, bold typography. Text: \"Did I email that AFTER leg day?\", pure white background"
+    },
+    {
+      "concept_id": "50cb2edb-03f2-4416-814d-aa91f958bf20",
+      "concept_name": "Deload Week Strategy",
+      "rank": 2,
+      "category": "Recovery Mode",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "My deload week strategy is just... not working.",
+        "visual_concept": "A simple, clean graphic of a calendar with several 'X' marks, implying a missed or failed plan. Subtle, ironic.",
+        "style_tags": [
+          "flat vector",
+          "clean lines",
+          "minimalist typography",
+          "iconography"
+        ],
+        "color_palette_hint": "Muted blue and grey",
+        "target_buyer": "The desk jockey who understands the importance of rest but can't quite execute it without feeling guilty."
+      },
+      "image_prompt_seed": "A flat vector graphic of a simple calendar with several X marks, screen-print ready, two colors, bold typography. Text: \"My deload week strategy is just... not working.\", pure white background"
+    },
+    {
+      "concept_id": "89af9c50-3891-4293-8f06-5c7d97bd8d21",
+      "concept_name": "Marathoner's Paradox",
+      "rank": 3,
+      "category": "Cardio Confession",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "I hate running. But my brain needs it.",
+        "visual_concept": "A stylized runner silhouette that's glitching or breaking apart, with a small, clean brain icon nearby. Represents mental necessity.",
+        "style_tags": [
+          "flat vector",
+          "glitch effect",
+          "iconography",
+          "bold typography"
+        ],
+        "color_palette_hint": "Charcoal and neon green",
+        "target_buyer": "The reluctant runner who endures miles for mental clarity, often while juggling demanding career tasks."
+      },
+      "image_prompt_seed": "A flat vector graphic of a glitching runner silhouette and a small brain icon, screen-print ready, two colors, bold typography. Text: \"I hate running. But my brain needs it.\", pure white background"
+    },
+    {
+      "concept_id": "7ee988f4-2205-48cd-b5b3-d7258b01d3ec",
+      "concept_name": "Powerlift Monday",
+      "rank": 4,
+      "category": "Iron Discipline",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "Monday Mornings: It's Not Heavy, It's Just Hard.",
+        "visual_concept": "A barbell graphic integrated with a minimalist skyscraper or office building silhouette. Combines gym and corporate worlds.",
+        "style_tags": [
+          "flat vector",
+          "bold typography",
+          "minimalist illustration",
+          "symbolic"
+        ],
+        "color_palette_hint": "Deep grey and burnt orange",
+        "target_buyer": "Someone who approaches their demanding job with the same mental fortitude required for heavy powerlifting."
+      },
+      "image_prompt_seed": "A flat vector graphic of a barbell merged with an office building silhouette, screen-print ready, two colors, bold typography. Text: \"Monday Mornings: It's Not Heavy, It's Just Hard.\", pure white background"
+    },
+    {
+      "concept_id": "5edf889d-4324-498e-99bf-8492f582e4ce",
+      "concept_name": "Subtle Gym Flex",
+      "rank": 5,
+      "category": "Gym Flex",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "Just a casual reminder of my posterior chain.",
+        "visual_concept": "A stylized, abstract representation of a muscular glute or hamstring, rendered in a clean, almost geometric style. Very understated.",
+        "style_tags": [
+          "flat vector",
+          "abstract",
+          "clean lines",
+          "minimalist"
+        ],
+        "color_palette_hint": "Navy blue and light grey",
+        "target_buyer": "The individual who wants to hint at their fitness without being overt, appreciating ironic understatement."
+      },
+      "image_prompt_seed": "A flat vector graphic of an abstract, geometric representation of a glute/hamstring, screen-print ready, two colors, bold typography. Text: \"Just a casual reminder of my posterior chain.\", pure white background"
+    },
+    {
+      "concept_id": "d06684df-3522-42ec-b4db-a03fe17dbd9a",
+      "concept_name": "Desk Job Deltoids",
+      "rank": 6,
+      "category": "Corporate Grind",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "Counteracting the Sit.",
+        "visual_concept": "A graphic showing a stylized office chair being pushed away by a pair of strong, lifting legs. Emphasizes the contrast.",
+        "style_tags": [
+          "flat vector",
+          "iconic",
+          "bold typography",
+          "simple illustration"
+        ],
+        "color_palette_hint": "Black and electric blue",
+        "target_buyer": "Anyone stuck in a sedentary job who uses the gym as a vital counterbalance to desk-induced physical stagnation."
+      },
+      "image_prompt_seed": "A flat vector graphic of an office chair being pushed away by lifting legs, screen-print ready, two colors, bold typography. Text: \"Counteracting the Sit.\", pure white background"
+    },
+    {
+      "concept_id": "87fe5844-7575-40b8-8713-7a262b978a8d",
+      "concept_name": "Post-Workout Email",
+      "rank": 7,
+      "category": "Corporate Grind",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "My brain is still on mute post-workout.",
+        "visual_concept": "A stylized brain icon with a muted or crossed-out 'sound on' symbol. Minimalist and relatable.",
+        "style_tags": [
+          "flat vector",
+          "minimalist",
+          "iconography",
+          "typography"
+        ],
+        "color_palette_hint": "White and deep purple",
+        "target_buyer": "Professionals who struggle with immediate cognitive function after a tough gym session, especially when meetings loom."
+      },
+      "image_prompt_seed": "A flat vector graphic of a brain icon with a muted sound symbol, screen-print ready, two colors, bold typography. Text: \"My brain is still on mute post-workout.\", pure white background"
+    },
+    {
+      "concept_id": "633701df-2acf-4340-93cf-6a2952a787d1",
+      "concept_name": "Deload as a Strategy",
+      "rank": 8,
+      "category": "Recovery Mode",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "Strategic Rest: AKA Avoiding All Responsibilities.",
+        "visual_concept": "A graphic combining a calendar icon with a relaxed, reclining figure, perhaps with a laptop nearby but unused. Ironic.",
+        "style_tags": [
+          "flat vector",
+          "humorous illustration",
+          "bold typography",
+          "iconic elements"
+        ],
+        "color_palette_hint": "Teal and cream",
+        "target_buyer": "The ambitious professional who views their 'deload' periods as a legitimate, albeit ironic, form of strategic avoidance."
+      },
+      "image_prompt_seed": "A flat vector graphic combining a calendar and a reclining figure, screen-print ready, two colors, bold typography. Text: \"Strategic Rest: AKA Avoiding All Responsibilities.\", pure white background"
+    },
+    {
+      "concept_id": "fbb10514-51a6-4ff6-88c8-4ee6bd9bfc4e",
+      "concept_name": "Runner's Mental Clarity",
+      "rank": 9,
+      "category": "Cardio Confession",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "Running: My Least Favorite Form of Therapy.",
+        "visual_concept": "A simple, clean graphic of running shoes with a subtle therapy couch or couch cushion icon integrated into the design.",
+        "style_tags": [
+          "flat vector",
+          "minimalist",
+          "iconographic",
+          "typography"
+        ],
+        "color_palette_hint": "Black and light grey",
+        "target_buyer": "Endurance athletes who grudgingly rely on running for mental health, despite a deep-seated dislike for the activity itself."
+      },
+      "image_prompt_seed": "A flat vector graphic of running shoes with an integrated therapy couch icon, screen-print ready, two colors, bold typography. Text: \"Running: My Least Favorite Form of Therapy.\", pure white background"
+    },
+    {
+      "concept_id": "ff57491b-e5c3-4111-95d3-8453c14184d0",
+      "concept_name": "Powerlifting Philosophy",
+      "rank": 10,
+      "category": "Iron Discipline",
+      "evidence": {
+        "etsy_tag_overlap": [],
+        "search_volume_signal": "low",
+        "saturation": "low",
+        "supporting_listings": [],
+        "price_tier_usd": []
+      },
+      "design_brief": {
+        "headline_text": "This Spreadsheet Isn't Heavy, It's Just Hard.",
+        "visual_concept": "A stylized barbell graphic subtly morphing into a stack of papers or a spreadsheet icon. Juxtaposes extreme effort.",
+        "style_tags": [
+          "flat vector",
+          "hybrid graphic",
+          "bold typography",
+          "symbolic"
+        ],
+        "color_palette_hint": "Dark red and white",
+        "target_buyer": "Individuals who apply the stoic resilience of powerlifting to overcome the daunting challenges of their corporate workload."
+      },
+      "image_prompt_seed": "A flat vector graphic of a barbell morphing into a stack of papers, screen-print ready, two colors, bold typography. Text: \"This Spreadsheet Isn't Heavy, It's Just Hard.\", pure white background"
+    }
+  ]
+}
