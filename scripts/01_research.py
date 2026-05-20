@@ -18,7 +18,7 @@ import os
 import random
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
 
@@ -30,7 +30,6 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from etsy_client import EtsyClient
 from gemini_client import generate_json
 from schemas import (
     DesignBrief, DesignBriefContent, Evidence, ResearchRun,
@@ -40,8 +39,10 @@ from src.research import concepts as concept_mod
 from src.research import probes as probe_mod
 from src.research import synthesis as synth_mod
 from src.research import themes as theme_mod
+from src.etsy_factory import get_etsy_client
 from src.research.feedback import format_feedback_for_gemini, load_feedback_signal
 from src.research.mining import mine_theme
+from supabase_sync import mark_seeds_used, read_research_seeds_for_run
 
 load_dotenv()
 
@@ -95,11 +96,7 @@ gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 gen_fn = partial(generate_json, gemini_client, model="gemini-2.5-flash")
 
 etsy_available = bool(os.environ.get("ETSY_API_KEY"))
-etsy = EtsyClient(
-    api_key=os.environ.get("ETSY_API_KEY", ""),
-    cache_dir=run_dir / "etsy_cache",
-    rps=5.0,
-)
+etsy = get_etsy_client(cache_dir=run_dir / "etsy_cache", rps=5.0)
 
 
 def _log(name: str, payload) -> None:
@@ -119,6 +116,32 @@ print(f"    cold_start={signal.get('is_cold_start')}, "
       f"winners={len(signal.get('top_winning_briefs') or [])}, "
       f"recent_themes={len(signal.get('recently_explored_themes') or [])}")
 _log("01_feedback_signal", signal)
+
+# ── 1b. Claude Task seeds (Supabase) ──────────────────────────────────────────
+# Pull this week's priority seeds Claude generated overnight. If Supabase is
+# unreachable or empty, fall back to the feedback signal alone.
+today = date.today()
+this_monday = today - timedelta(days=today.weekday())
+supabase_seeds = read_research_seeds_for_run(this_monday)
+if supabase_seeds:
+    high = [s for s in supabase_seeds if (s.get("priority_score") or 0) >= 0.7]
+    standard = [s for s in supabase_seeds if (s.get("priority_score") or 0) < 0.7]
+    print(f"    Claude Task seeds: {len(supabase_seeds)} ({len(high)} high-priority, {len(standard)} standard)")
+    seed_lines = ["", "## Claude Task seeds (this week, in priority order)"]
+    for s in supabase_seeds:
+        seed_lines.append(
+            f"- [{s.get('seed_type','?')} score={float(s.get('priority_score') or 0):.2f} "
+            f"verdict={s.get('trend_verdict') or '-'}] {s.get('seed_text','')}"
+            + (f" — {s['trend_reasoning']}" if s.get("trend_reasoning") else "")
+        )
+    seed_lines.append(
+        "\nWeight HIGH-PRIORITY (score ≥ 0.7) seeds toward EXPLOIT/EXPLORE theme generation; "
+        "STANDARD seeds belong in UNDERREPRESENTED."
+    )
+    feedback_block = feedback_block + "\n" + "\n".join(seed_lines)
+    _log("01b_supabase_seeds", supabase_seeds)
+else:
+    print("    No Claude Task seeds in Supabase — running on feedback signal only")
 
 # ── 2. Create research_run row ────────────────────────────────────────────────
 config = {
@@ -329,6 +352,10 @@ for b in brief_rows:
 )
 
 db.finish_run(conn, run_id)
+
+if supabase_seeds:
+    mark_seeds_used(run_id, [s["seed_text"] for s in supabase_seeds if s.get("seed_text")])
+
 conn.close()
 
 print(f"\nDone. {len(briefs_out)} briefs → design_briefs.json")
