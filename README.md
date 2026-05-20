@@ -56,6 +56,32 @@ python scripts/test_pipeline.py lineage <brief_id>
 
 After the first weekly cycle, `python scripts/01_research.py` (no flag) loads `listing_stats` from `pod.db`, computes the feedback signal, and biases ~40% of next week's themes toward winners.
 
+## Workflow (Claude Tasks Edition)
+
+| Schedule | Runner | Action |
+|----------|--------|--------|
+| Daily 9 AM | **Claude Task** | Checks Etsy listing stats via Etsy MCP, flags hot signals → Supabase |
+| Daily 9 AM | **Claude Task** | Web-searches cultural trend signals for active themes → Supabase |
+| Sunday 8 PM | **Claude Task** | Generates prioritized seed themes for next week → Supabase |
+| Monday AM | Python `01_research.py` | Reads seeds from Supabase, runs Etsy sampling, generates concepts |
+| Mon–Thu | Python (existing) | `02 → 03 → 04 → 06` unchanged |
+| Sun 9 AM | Python `07_track_stats.py` | Auto-detect Etsy URLs + stats sync + mirror state back to Supabase |
+
+The two Claude Tasks live in claude.ai (Pro plan). See
+[`docs/claude_tasks_setup.md`](docs/claude_tasks_setup.md) for the exact
+prompts and schedule to paste.
+
+### Etsy MCP (optional — richer data, set `ETSY_USE_MCP=1`)
+
+```bash
+pip install uvx
+uvx etsy-mcp@latest
+```
+
+Required env vars: `ETSY_API_KEY`, `ETSY_REFRESH_TOKEN`, `ETSY_DEFAULT_SHOP_ID`.
+The MCP server handles OAuth token refresh automatically. The REST
+`EtsyClient` stays as the default when `ETSY_USE_MCP=0` (or unset).
+
 ## Tests
 
 ```bash
