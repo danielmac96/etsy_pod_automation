@@ -45,7 +45,10 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_D
     conn.commit()
     applied = {r["filename"] for r in conn.execute("SELECT filename FROM schema_migrations")}
     newly: list[str] = []
-    for f in sorted(migrations_dir.glob("*.sql")):
+    # Only pod.db (SQLite) migration files are digit-prefixed (e.g. "0001_init.sql").
+    # Other *.sql files in this dir (like supabase_schema.sql) target other engines
+    # and are applied manually — never load them into SQLite.
+    for f in sorted(migrations_dir.glob("[0-9]*.sql")):
         if f.name in applied:
             continue
         sql = f.read_text(encoding="utf-8")

@@ -193,6 +193,17 @@ def main() -> None:
               "have new listings discovered automatically by title.")
 
     sync_stats(conn)
+
+    # Mirror live listing + concept state into Supabase so Claude Tasks
+    # can read it. No-op when SUPABASE_URL is unset.
+    try:
+        from supabase_sync import sync_approved_concepts, sync_live_listings
+        n_live = sync_live_listings(conn)
+        n_concepts = sync_approved_concepts(conn)
+        print(f"Supabase sync: {n_live} live listings, {n_concepts} approved concepts")
+    except Exception as e:
+        print(f"Supabase sync skipped: {e}")
+
     conn.close()
 
 
