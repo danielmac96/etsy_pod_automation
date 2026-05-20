@@ -30,7 +30,6 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from etsy_client import EtsyClient
 from gemini_client import generate_json
 from schemas import (
     DesignBrief, DesignBriefContent, Evidence, ResearchRun,
@@ -40,6 +39,7 @@ from src.research import concepts as concept_mod
 from src.research import probes as probe_mod
 from src.research import synthesis as synth_mod
 from src.research import themes as theme_mod
+from src.etsy_factory import get_etsy_client
 from src.research.feedback import format_feedback_for_gemini, load_feedback_signal
 from src.research.mining import mine_theme
 from supabase_sync import mark_seeds_used, read_research_seeds_for_run
@@ -96,11 +96,7 @@ gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 gen_fn = partial(generate_json, gemini_client, model="gemini-2.5-flash")
 
 etsy_available = bool(os.environ.get("ETSY_API_KEY"))
-etsy = EtsyClient(
-    api_key=os.environ.get("ETSY_API_KEY", ""),
-    cache_dir=run_dir / "etsy_cache",
-    rps=5.0,
-)
+etsy = get_etsy_client(cache_dir=run_dir / "etsy_cache", rps=5.0)
 
 
 def _log(name: str, payload) -> None:
