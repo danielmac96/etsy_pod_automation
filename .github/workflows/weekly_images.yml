@@ -21,6 +21,10 @@ jobs:
         env:
           FAL_KEY: ${{ secrets.FAL_KEY }}
           IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AUTO_APPROVE_IMAGES: ${{ vars.AUTO_APPROVE_IMAGES || '0' }}
+          AUTO_APPROVE_IMAGE_MIN_SCORE: ${{ vars.AUTO_APPROVE_IMAGE_MIN_SCORE || '8' }}
+          AUTO_REJECT_IMAGE_MAX_SCORE: ${{ vars.AUTO_REJECT_IMAGE_MAX_SCORE || '3' }}
 
       - name: Send image review email
         run: python scripts/05_notify.py

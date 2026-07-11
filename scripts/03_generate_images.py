@@ -13,14 +13,59 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 from src import db
+from src.config import (
+    auto_approve_images,
+    image_approve_min_score,
+    image_reject_max_score,
+)
 
 load_dotenv()
 
 FAL_KEY = os.environ["FAL_KEY"]
 IMGBB_API_KEY = os.environ["IMGBB_API_KEY"]
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 DB_PATH = os.environ.get("POD_DB_PATH", "pod.db")
 
 os.makedirs("images", exist_ok=True)
+
+# Gemini vision pre-screen — optional (skipped when GEMINI_API_KEY unset).
+# Scores print-readiness so the human only reviews borderline images, and
+# obviously-garbled renders are auto-rejected without waiting for Wednesday.
+_gemini_client = None
+if GEMINI_API_KEY:
+    from google import genai
+    from gemini_client import generate_json
+    _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+_SCREEN_PROMPT = """You are quality-controlling AI-generated t-shirt graphics for an Etsy print-on-demand shop.
+The intended design prompt was:
+
+{prompt}
+
+Score this image for print-readiness. Heavily penalize: garbled/misspelled text, text that differs from the quoted slogan in the prompt, gradients or photographic textures (must be flat screen-print style), artwork touching the canvas edges, muddy low-contrast art, or a non-white background.
+
+Return ONLY a JSON object: {{"score": <0-10 number>, "issues": ["short issue", ...]}} — an empty issues list if the design is clean."""
+
+
+def screen_image(local_path: str, prompt_text: str) -> tuple[float | None, str | None]:
+    """Return (score, feedback_text) from Gemini vision, or (None, None) if unavailable."""
+    if _gemini_client is None:
+        return None, None
+    try:
+        with open(local_path, "rb") as f:
+            image_bytes = f.read()
+        result = generate_json(
+            _gemini_client,
+            _SCREEN_PROMPT.format(prompt=prompt_text),
+            image_bytes=image_bytes,
+            temperature=0.2,
+        )
+        score = float(result.get("score"))
+        issues = result.get("issues") or []
+        return score, "; ".join(str(i) for i in issues) if issues else "clean"
+    except Exception as e:
+        print(f"  AI screen failed (leaving unreviewed): {e}")
+        return None, None
 
 
 def generate_image(prompt: str) -> str:
@@ -86,30 +131,54 @@ for i, row in enumerate(pending):
     fal_url = generate_image(prompt_text)
     local_path = save_locally(fal_url, filename)
     imgbb_url = upload_to_imgbb(local_path)
-    db.lineage_upsert(conn, lineage_id, image_url=imgbb_url)
-    db.lineage_set_image_status(conn, lineage_id, "unreviewed")
+
+    ai_score, ai_feedback = screen_image(local_path, prompt_text)
+    status = "unreviewed"
+    if ai_score is not None:
+        if ai_score <= image_reject_max_score():
+            status = "rejected"
+        elif auto_approve_images() and ai_score >= image_approve_min_score():
+            status = "approved"
+        print(f"  AI screen: {ai_score}/10 ({ai_feedback}) → {status}")
+
+    db.lineage_upsert(conn, lineage_id, image_url=imgbb_url,
+                      ai_score=ai_score, ai_feedback=ai_feedback)
+    db.lineage_set_image_status(conn, lineage_id, status)
     results.append({
         "lineage_id": lineage_id,
         "category": row["category"],
         "prompt": prompt_text,
         "local_path": local_path,
         "imgbb_url": imgbb_url,
+        "ai_score": ai_score,
+        "ai_feedback": ai_feedback,
+        "image_status": status,
     })
-    print(f"Updated lineage {lineage_id[:8]} → image_status=unreviewed")
+    print(f"Updated lineage {lineage_id[:8]} → image_status={status}")
 
 conn.close()
 
 with open("images/results.json", "w") as f:
     json.dump(results, f, indent=2)
 
+n_rejected = sum(1 for r in results if r["image_status"] == "rejected")
+n_approved = sum(1 for r in results if r["image_status"] == "approved")
+n_pending = len(results) - n_rejected - n_approved
+detail = f"{len(results)} images generated; {n_pending} awaiting your approval."
+if n_approved or n_rejected:
+    detail += (f" AI pre-screen auto-approved {n_approved} and "
+               f"auto-rejected {n_rejected}.")
+
 with open("notify_context.json", "w") as f:
     json.dump({
-        "count": len(results),
+        "count": n_pending,
         "stage": "images",
-        "detail": f"{len(results)} images generated and ready for your approval.",
+        "detail": detail,
         "items": [
             {"lineage_id": r["lineage_id"], "category": r["category"],
-             "prompt": r["prompt"], "image_url": r["imgbb_url"]}
+             "prompt": r["prompt"], "image_url": r["imgbb_url"],
+             "ai_score": r["ai_score"], "ai_feedback": r["ai_feedback"],
+             "image_status": r["image_status"]}
             for r in results
         ],
     }, f)

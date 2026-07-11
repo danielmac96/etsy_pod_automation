@@ -26,6 +26,7 @@ jobs:
         run: python scripts/02_generate_prompts.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AUTO_APPROVE_PROMPTS: ${{ vars.AUTO_APPROVE_PROMPTS || '0' }}
 
       - name: Send prompt review email
         run: python scripts/05_notify.py

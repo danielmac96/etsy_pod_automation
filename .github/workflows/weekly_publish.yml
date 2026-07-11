@@ -1,0 +1,40 @@
+name: Weekly Etsy Publish
+on:
+  schedule:
+    - cron: '0 14 * * 5'  # Friday 9am EST — day after Thursday's drafts + approvals
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+
+      - name: Publish approved Printify drafts to Etsy
+        run: python scripts/08_publish_etsy.py
+        env:
+          PRINTIFY_API_KEY: ${{ secrets.PRINTIFY_API_KEY }}
+          PRINTIFY_SHOP_ID: ${{ secrets.PRINTIFY_SHOP_ID }}
+          AUTO_PUBLISH: ${{ vars.AUTO_PUBLISH || '0' }}
+
+      - name: Send published confirmation email
+        run: python scripts/05_notify.py
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          LOCAL_APP_URL: ${{ vars.LOCAL_APP_URL || 'http://localhost:8501' }}
+
+      - name: Commit pod.db
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pod.db
+          git diff --cached --quiet || git commit -m "auto: weekly Etsy publish [skip ci]"
+          git push

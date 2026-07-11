@@ -19,6 +19,7 @@ jobs:
         env:
           ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
           ETSY_ACCESS_TOKEN: ${{ secrets.ETSY_ACCESS_TOKEN }}
+          ETSY_REFRESH_TOKEN: ${{ secrets.ETSY_REFRESH_TOKEN }}
           ETSY_SHOP_ID: ${{ secrets.ETSY_SHOP_ID }}
 
       - name: Commit pod.db

@@ -23,10 +23,22 @@ def generate_json(
     model: str = "gemini-2.5-flash",
     schema: dict | None = None,
     temperature: float = 1.0,
+    image_bytes: bytes | None = None,
+    image_mime_type: str = "image/png",
 ) -> Any:
-    """Call Gemini with JSON output mode, retrying on 503 and falling back on 429."""
+    """Call Gemini with JSON output mode, retrying on 503 and falling back on 429.
+
+    Pass image_bytes for multimodal calls (e.g. the 03 image pre-screen).
+    """
     models_to_try = [model] + [m for m in _FALLBACK_MODELS if m != model]
     last_err: Exception | None = None
+
+    contents: Any = prompt
+    if image_bytes is not None:
+        contents = [
+            genai_types.Part.from_bytes(data=image_bytes, mime_type=image_mime_type),
+            prompt,
+        ]
 
     for m in models_to_try:
         for retry in range(3):
@@ -39,7 +51,7 @@ def generate_json(
                     config.response_schema = schema
                 response = client.models.generate_content(
                     model=m,
-                    contents=prompt,
+                    contents=contents,
                     config=config,
                 )
                 if m != model:

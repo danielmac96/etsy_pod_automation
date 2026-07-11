@@ -27,6 +27,19 @@ jobs:
           PRINTIFY_API_KEY: ${{ secrets.PRINTIFY_API_KEY }}
           PRINTIFY_SHOP_ID: ${{ secrets.PRINTIFY_SHOP_ID }}
 
+      # Fully hands-off mode: when the AUTO_PUBLISH repo variable is 1, fresh
+      # drafts are published to Etsy immediately (the notify step then sends
+      # the "published" confirmation instead of an approval request). With the
+      # gate closed this step is skipped and Friday's workflow publishes
+      # whatever was approved in the app's Publish tab.
+      - name: Auto-publish drafts to Etsy (only when AUTO_PUBLISH=1)
+        if: ${{ vars.AUTO_PUBLISH == '1' }}
+        run: python scripts/08_publish_etsy.py
+        env:
+          PRINTIFY_API_KEY: ${{ secrets.PRINTIFY_API_KEY }}
+          PRINTIFY_SHOP_ID: ${{ secrets.PRINTIFY_SHOP_ID }}
+          AUTO_PUBLISH: '1'
+
       - name: Send draft-ready email
         run: python scripts/05_notify.py
         env:

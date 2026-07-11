@@ -136,8 +136,8 @@ with open("notify_context.json", "w") as f:
         "stage": "drafts",
         "detail": (
             f"{drafts_created} Printify draft(s) created from {len(candidates)} approved design(s). "
-            f"Review drafts in Printify, then publish to Etsy. "
-            f"Sunday's stats sync will auto-detect Etsy URLs by title."
+            f"Approve them in the app's Publish tab and they'll be listed on Etsy "
+            f"automatically. Sunday's stats sync will auto-detect Etsy URLs by title."
         ),
         "items": draft_items,
     }, f)

@@ -12,6 +12,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 from gemini_client import generate_json
 from src import db
+from src.config import auto_approve_prompts
 
 load_dotenv()
 
@@ -191,6 +192,10 @@ for category, description in CATEGORIES.items():
             prompt_text=prompt_text,
             category=category,
         )
+        # AUTO_APPROVE_PROMPTS=1 opens the Monday gate: prompts go straight
+        # to Wednesday's image gen (which spends FAL credits — default off).
+        if auto_approve_prompts():
+            db.lineage_set_prompt_status(conn, lineage_id, "approved")
         created_lineage_ids.append(lineage_id)
         all_prompts.append({
             "lineage_id": lineage_id,
@@ -207,6 +212,7 @@ with open("prompts.json", "w") as f:
     json.dump(all_prompts, f, indent=2)
 
 # Context for 05_notify.py — items list lets the email render a per-prompt summary table
+_auto = auto_approve_prompts()
 with open("notify_context.json", "w") as f:
     json.dump({
         "count": len(created_lineage_ids),
@@ -214,6 +220,8 @@ with open("notify_context.json", "w") as f:
         "detail": (
             f"{len(created_lineage_ids)} prompts generated across {len(CATEGORIES)} categories "
             f"({PROMPTS_PER_CATEGORY} per category)."
+            + (" AUTO_APPROVE_PROMPTS is on — all prompts were auto-approved and "
+               "will go to image generation on Wednesday." if _auto else "")
         ),
         "items": [
             {"lineage_id": p["lineage_id"], "category": p["category"],
