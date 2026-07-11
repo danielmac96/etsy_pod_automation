@@ -29,11 +29,12 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 from src import db as pod_db
+from src.etsy_auth import get_access_token
 
 load_dotenv()
 
 ETSY_KEY = os.environ.get("ETSY_API_KEY", "")
-ETSY_TOKEN = os.environ.get("ETSY_ACCESS_TOKEN", "")
+ETSY_TOKEN = get_access_token()
 ETSY_SHOP_ID = os.environ.get("ETSY_SHOP_ID", "")
 DB_PATH = os.environ.get("POD_DB_PATH", "pod.db")
 
@@ -181,7 +182,8 @@ def main() -> None:
     if not ETSY_KEY:
         raise SystemExit("Set ETSY_API_KEY")
     if not ETSY_TOKEN:
-        print("Warning: ETSY_ACCESS_TOKEN empty — Etsy v3 usually requires OAuth; requests may fail.")
+        print("Warning: no Etsy OAuth token — set ETSY_REFRESH_TOKEN (auto-refresh, "
+              "recommended) or ETSY_ACCESS_TOKEN; requests may fail.")
 
     conn = pod_db.connect(DB_PATH)
     pod_db.run_migrations(conn)

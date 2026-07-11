@@ -276,12 +276,14 @@ def insert_briefs(conn, briefs: list[DesignBriefRow]) -> list[str]:
 LINEAGE_FIELDS = (
     "brief_id", "prompt_text", "image_url", "printify_draft_url", "etsy_listing_url",
     "category", "etsy_title", "etsy_description", "etsy_tags_json",
-    "prompt_status", "image_status", "draft_status",
+    "prompt_status", "image_status", "draft_status", "publish_status",
+    "ai_score", "ai_feedback",
 )
 
-_PROMPT_STATUSES = {"unreviewed", "approved", "rejected"}
-_IMAGE_STATUSES  = {"unreviewed", "approved", "rejected"}
-_DRAFT_STATUSES  = {"pending", "drafted", "published"}
+_PROMPT_STATUSES  = {"unreviewed", "approved", "rejected"}
+_IMAGE_STATUSES   = {"unreviewed", "approved", "rejected"}
+_DRAFT_STATUSES   = {"pending", "drafted", "published"}
+_PUBLISH_STATUSES = {"unreviewed", "approved", "rejected", "published"}
 
 
 def lineage_create(
@@ -363,6 +365,16 @@ def lineage_set_draft_status(conn, lineage_id: str, status: str) -> None:
     conn.commit()
 
 
+def lineage_set_publish_status(conn, lineage_id: str, status: str) -> None:
+    if status not in _PUBLISH_STATUSES:
+        raise ValueError(f"publish_status must be one of {_PUBLISH_STATUSES}, got {status!r}")
+    conn.execute(
+        "UPDATE lineage SET publish_status = ?, last_updated_at = ? WHERE lineage_id = ?",
+        (status, _now(), lineage_id),
+    )
+    conn.commit()
+
+
 def lineage_pending_for_stage(conn, stage: str) -> list[sqlite3.Row]:
     """Return lineage rows that are ready for the next pipeline stage.
 
@@ -373,19 +385,26 @@ def lineage_pending_for_stage(conn, stage: str) -> list[sqlite3.Row]:
       'copy_gen'       — image_status='approved' AND etsy_title IS NULL (script 04)
       'draft_create'   — etsy_title IS NOT NULL AND printify_draft_url IS NULL
                          AND image_status='approved' (script 06)
+      'publish_review' — draft_status='drafted' AND publish_status='unreviewed'
+                         (Streamlit Publish tab — the Etsy-listing-fee cost gate)
+      'publish'        — publish_status='approved' AND draft_status='drafted'
+                         AND printify_draft_url IS NOT NULL (script 08)
       'etsy_publish'   — draft_status='drafted' AND etsy_listing_url IS NULL
-                         (Streamlit Thu tab + script 07 auto-detect)
+                         (Streamlit Listings tab + script 07 auto-detect)
       'stats_sync'     — etsy_listing_url IS NOT NULL (script 07)
     """
     where = {
-        "prompt_review": "prompt_status = 'unreviewed'",
-        "image_gen":     "prompt_status = 'approved' AND image_url IS NULL",
-        "image_review":  "image_status = 'unreviewed' AND image_url IS NOT NULL",
-        "copy_gen":      "image_status = 'approved' AND etsy_title IS NULL",
-        "draft_create":  "etsy_title IS NOT NULL AND printify_draft_url IS NULL "
-                         "AND image_status = 'approved'",
-        "etsy_publish":  "draft_status = 'drafted' AND etsy_listing_url IS NULL",
-        "stats_sync":    "etsy_listing_url IS NOT NULL",
+        "prompt_review":  "prompt_status = 'unreviewed'",
+        "image_gen":      "prompt_status = 'approved' AND image_url IS NULL",
+        "image_review":   "image_status = 'unreviewed' AND image_url IS NOT NULL",
+        "copy_gen":       "image_status = 'approved' AND etsy_title IS NULL",
+        "draft_create":   "etsy_title IS NOT NULL AND printify_draft_url IS NULL "
+                          "AND image_status = 'approved'",
+        "publish_review": "draft_status = 'drafted' AND publish_status = 'unreviewed'",
+        "publish":        "publish_status = 'approved' AND draft_status = 'drafted' "
+                          "AND printify_draft_url IS NOT NULL",
+        "etsy_publish":   "draft_status = 'drafted' AND etsy_listing_url IS NULL",
+        "stats_sync":     "etsy_listing_url IS NOT NULL",
     }.get(stage)
     if where is None:
         raise ValueError(f"unknown stage {stage!r}")

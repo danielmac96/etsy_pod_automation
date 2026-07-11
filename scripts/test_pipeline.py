@@ -10,7 +10,7 @@ Usage:
   python scripts/test_pipeline.py state            # pod.db pipeline state
   python scripts/test_pipeline.py db               # pod.db schema + counts + last 5 lineage/listing_stats
   python scripts/test_pipeline.py lineage <brief>  # full theme→concept→brief→lineage→stats chain
-  python scripts/test_pipeline.py validate <N>     # check inputs for step N (01,02,03,04,06,07)
+  python scripts/test_pipeline.py validate <N>     # check inputs for step N (01,02,03,04,06,07,08)
   python scripts/test_pipeline.py dry-run 01       # preview keyword generation
   python scripts/test_pipeline.py dry-run 02       # preview 1 prompt per category
   python scripts/test_pipeline.py dry-run 04       # preview copy for first image_status='approved' lineage row
@@ -149,6 +149,8 @@ def pipeline_state():
         "Images approved":     conn.execute("SELECT COUNT(*) c FROM lineage WHERE image_status='approved' AND etsy_title IS NULL").fetchone()["c"],
         "Images rejected":     conn.execute("SELECT COUNT(*) c FROM lineage WHERE image_status='rejected'").fetchone()["c"],
         "Copy generated":      conn.execute("SELECT COUNT(*) c FROM lineage WHERE etsy_title IS NOT NULL AND printify_draft_url IS NULL").fetchone()["c"],
+        "Awaiting publish OK":  conn.execute("SELECT COUNT(*) c FROM lineage WHERE draft_status='drafted' AND publish_status='unreviewed'").fetchone()["c"],
+        "Publish approved":     conn.execute("SELECT COUNT(*) c FROM lineage WHERE publish_status='approved' AND draft_status='drafted'").fetchone()["c"],
         "Drafted (no Etsy URL)": conn.execute("SELECT COUNT(*) c FROM lineage WHERE draft_status='drafted' AND etsy_listing_url IS NULL").fetchone()["c"],
         "Published":           conn.execute("SELECT COUNT(*) c FROM lineage WHERE draft_status='published'").fetchone()["c"],
     }
@@ -167,8 +169,10 @@ def pipeline_state():
         warn(f"{counts['Prompts unreviewed']} prompts awaiting approval — open `streamlit run scripts/approve_app.py`")
     if counts["Images unreviewed"]:
         warn(f"{counts['Images unreviewed']} images awaiting approval — open the local app")
-    if counts["Drafted (no Etsy URL)"]:
-        warn(f"{counts['Drafted (no Etsy URL)']} drafts in Printify — publish to Etsy and let stats sync auto-detect")
+    if counts["Awaiting publish OK"]:
+        warn(f"{counts['Awaiting publish OK']} drafts awaiting publish approval — open the local app's Publish tab")
+    if counts["Publish approved"]:
+        warn(f"{counts['Publish approved']} drafts approved — run 08_publish_etsy.py (or wait for Friday's workflow)")
 
     conn.close()
 
@@ -233,8 +237,16 @@ def validate_step(step: str):
         else: warn("0 published rows yet — auto-detect step needs ETSY_SHOP_ID and at least one drafted listing live on Etsy")
         blank()
         _env_check("ETSY_API_KEY")
+        _env_check("ETSY_REFRESH_TOKEN", required=False)
         _env_check("ETSY_ACCESS_TOKEN", required=False)
         _env_check("ETSY_SHOP_ID", required=False)
+    elif step == "08":
+        n = len(_db.lineage_pending_for_stage(conn, "publish"))
+        m = len(_db.lineage_pending_for_stage(conn, "publish_review"))
+        if n: ok(f"{n} approved draft(s) ready to publish to Etsy")
+        else: warn(f"0 publish-approved rows ({m} awaiting approval in the local app's Publish tab)")
+        blank()
+        _env_check("PRINTIFY_API_KEY"); _env_check("PRINTIFY_SHOP_ID")
     else:
         fail(f"Unknown step: '{step}'")
         info("Valid steps: 01  02  03  04  06  07")
@@ -558,7 +570,7 @@ USAGE = """
   python scripts/test_pipeline.py state            pod.db pipeline state
   python scripts/test_pipeline.py db               pod.db row counts + last 5 lineage/listing_stats
   python scripts/test_pipeline.py lineage <brief>  full theme→concept→brief→lineage→stats chain
-  python scripts/test_pipeline.py validate <N>     check inputs for step N (01,02,03,04,06,07)
+  python scripts/test_pipeline.py validate <N>     check inputs for step N (01,02,03,04,06,07,08)
   python scripts/test_pipeline.py dry-run  01      preview keyword generation
   python scripts/test_pipeline.py dry-run  02      preview 1 prompt per category
   python scripts/test_pipeline.py dry-run  04      preview copy for first image-approved lineage row

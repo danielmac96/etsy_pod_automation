@@ -60,7 +60,8 @@ def test_migrations_idempotent(tmp_path: Path):
     conn = db.connect(tmp_path / "x.db")
     first = db.run_migrations(conn)
     second = db.run_migrations(conn)
-    assert first == ["0001_init.sql", "0002_local_approval.sql", "0003_hot_signal.sql"]
+    assert first == ["0001_init.sql", "0002_local_approval.sql", "0003_hot_signal.sql",
+                     "0004_publish_automation.sql"]
     assert second == []
     rows = list(conn.execute("SELECT filename FROM schema_migrations"))
     assert len(rows) == len(first)
