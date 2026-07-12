@@ -115,6 +115,52 @@ def test_extract_product_id_from_draft_url():
     assert printify.extract_product_id("https://printify.com/app/shop/123") is None
 
 
+def test_sanitize_etsy_tags_enforces_constraints():
+    tags = printify.sanitize_etsy_tags(
+        ["gym shirt", "GYM SHIRT", "  ", "a tag that is far too long for etsy"]
+        + [f"tag{i}" for i in range(20)]
+    )
+    assert len(tags) == 13
+    assert tags[0] == "gym shirt"
+    assert "GYM SHIRT" not in tags  # case-insensitive dedup
+    assert all(len(t) <= 20 for t in tags)
+
+
+def test_select_variants_filters_color_size_grid():
+    catalog = [
+        {"id": 1, "title": "Black / S"},
+        {"id": 2, "title": "Black / 3XL"},
+        {"id": 3, "title": "White / M"},
+        {"id": 4, "title": "Heather Navy / S"},
+    ]
+    picked = printify.select_variants(
+        catalog, colors=["Black", "White"], sizes=["S", "M"], price_cents=2499
+    )
+    assert [v["id"] for v in picked] == [1, 3]
+    assert all(v["price"] == 2499 and v["is_enabled"] for v in picked)
+
+
+def test_build_product_payload_is_etsy_ready():
+    variants = [{"id": 1, "price": 2499, "is_enabled": True}]
+    payload = printify.build_product_payload(
+        title="Test Tee",
+        description="A great shirt.",
+        tags=["gym", "office humor"],
+        blueprint_id=6,
+        print_provider_id=99,
+        variants=variants,
+        image_id="img-1",
+        print_scale=0.75,
+    )
+    assert payload["title"] == "Test Tee"
+    assert payload["description"] == "A great shirt."
+    assert payload["tags"] == ["gym", "office humor"]
+    assert payload["blueprint_id"] == 6
+    assert payload["print_areas"][0]["variant_ids"] == [1]
+    img = payload["print_areas"][0]["placeholders"][0]["images"][0]
+    assert img["id"] == "img-1" and img["scale"] == 0.75
+
+
 # ── config flags ──────────────────────────────────────────────────────────────
 
 def test_env_flag_parsing(monkeypatch):

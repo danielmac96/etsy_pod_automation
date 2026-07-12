@@ -128,6 +128,49 @@ def test_feedback_signal_cold_start(fresh_conn):
     assert sig["underrepresented_categories"] == []
     assert sig["winning_style_tags"] == []
     assert sig["recently_explored_themes"] == []
+    assert sig["rejection_signal"] == {
+        "rejected_by_category": [], "recent_rejected_prompts": [],
+    }
+
+
+def test_rejection_signal_counts_prompt_and_image_rejects(fresh_conn):
+    p1 = db.lineage_create(fresh_conn, prompt_text="bad pun about mondays",
+                           category="Corporate Grind")
+    db.lineage_set_prompt_status(fresh_conn, p1, "rejected")
+
+    p2 = db.lineage_create(fresh_conn, prompt_text="garbled render prompt",
+                           category="Gym Flex")
+    db.lineage_set_prompt_status(fresh_conn, p2, "approved")
+    db.lineage_upsert(fresh_conn, p2, image_url="https://x",
+                      ai_feedback="text is illegible")
+    db.lineage_set_image_status(fresh_conn, p2, "rejected")
+
+    p3 = db.lineage_create(fresh_conn, prompt_text="a keeper",
+                           category="Gym Flex")
+    db.lineage_set_prompt_status(fresh_conn, p3, "approved")
+
+    sig = db.load_rejection_signal(fresh_conn)
+    by_cat = {r["category"]: r for r in sig["rejected_by_category"]}
+    assert by_cat["Corporate Grind"]["prompts_rejected"] == 1
+    assert by_cat["Gym Flex"]["images_rejected"] == 1
+
+    samples = sig["recent_rejected_prompts"]
+    assert len(samples) == 2
+    gates = {s["prompt_text"]: s["rejected_at"] for s in samples}
+    assert gates["bad pun about mondays"] == "prompt"
+    assert gates["garbled render prompt"] == "image"
+    image_reject = next(s for s in samples if s["rejected_at"] == "image")
+    assert image_reject["ai_feedback"] == "text is illegible"
+
+
+def test_rejection_signal_included_even_on_cold_start(fresh_conn):
+    lid = db.lineage_create(fresh_conn, prompt_text="rejected on day one",
+                            category="Iron Discipline")
+    db.lineage_set_prompt_status(fresh_conn, lid, "rejected")
+
+    sig = db.load_feedback_signal(fresh_conn)
+    assert sig["is_cold_start"] is True
+    assert sig["rejection_signal"]["rejected_by_category"][0]["category"] == "Iron Discipline"
 
 
 def test_lineage_create_defaults(fresh_conn):

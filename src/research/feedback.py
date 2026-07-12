@@ -11,13 +11,41 @@ from src.db import load_feedback_signal  # re-export
 __all__ = ["load_feedback_signal", "format_feedback_for_gemini"]
 
 
+def _format_rejections(signal: dict) -> list[str]:
+    rejections = signal.get("rejection_signal") or {}
+    lines: list[str] = []
+
+    by_cat = rejections.get("rejected_by_category") or []
+    if by_cat:
+        lines.append("")
+        lines.append("Rejection pressure by category (approval-gate rejects, recent weeks):")
+        for r in by_cat:
+            lines.append(
+                f"  - {r['category']}: {r['prompts_rejected']} prompt(s), "
+                f"{r['images_rejected']} image(s) rejected"
+            )
+
+    samples = rejections.get("recent_rejected_prompts") or []
+    if samples:
+        lines.append("")
+        lines.append("Recently REJECTED designs — steer AWAY from these directions/mistakes:")
+        for s in samples[:8]:
+            snippet = (s["prompt_text"] or "")[:140]
+            note = f" (AI note: {s['ai_feedback'][:80]})" if s.get("ai_feedback") else ""
+            lines.append(f"  - [{s['category']}] rejected at {s['rejected_at']} gate: "
+                         f"{snippet!r}{note}")
+    return lines
+
+
 def format_feedback_for_gemini(signal: dict) -> str:
     if signal.get("is_cold_start"):
-        return (
+        cold = (
             "FEEDBACK SIGNAL: cold start — no listing performance history yet. "
             "Generate themes from first principles using the brand voice and "
             "category set; bias toward exploration, not exploitation."
         )
+        rejection_lines = _format_rejections(signal)
+        return cold + ("\n" + "\n".join(rejection_lines) if rejection_lines else "")
 
     lines: list[str] = []
     weeks = signal.get("weeks_analyzed", 4)
@@ -62,5 +90,7 @@ def format_feedback_for_gemini(signal: dict) -> str:
             lines.append(f"  - {r['theme_name']} :: {tension}")
         if len(recent) > 20:
             lines.append(f"  ... and {len(recent) - 20} more")
+
+    lines.extend(_format_rejections(signal))
 
     return "\n".join(lines)

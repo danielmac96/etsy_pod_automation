@@ -434,11 +434,66 @@ def record_stats(conn, lineage_id: str, views: int, favorites: int) -> int:
 
 # ── feedback signal ───────────────────────────────────────────────────────────
 
+def load_rejection_signal(conn, weeks: int = 4) -> dict:
+    """Aggregate human/AI rejections so generation stages can steer away
+    from directions that keep getting rejected at the prompt or image gate.
+
+    Rejections accumulate before the first listing ever ships, so this is
+    available even during a cold start (unlike listing_stats).
+    """
+    cutoff = f"-{weeks * 7} days"
+
+    by_category = conn.execute(
+        """
+        SELECT COALESCE(category, '?') AS category,
+               SUM(CASE WHEN prompt_status = 'rejected' THEN 1 ELSE 0 END) AS prompts_rejected,
+               SUM(CASE WHEN image_status  = 'rejected' THEN 1 ELSE 0 END) AS images_rejected
+        FROM lineage
+        WHERE (prompt_status = 'rejected' OR image_status = 'rejected')
+          AND last_updated_at >= datetime('now', ?)
+        GROUP BY COALESCE(category, '?')
+        ORDER BY prompts_rejected + images_rejected DESC
+        """,
+        (cutoff,),
+    ).fetchall()
+
+    samples = conn.execute(
+        """
+        SELECT category, prompt_text, ai_feedback,
+               CASE WHEN prompt_status = 'rejected' THEN 'prompt' ELSE 'image' END AS rejected_at
+        FROM lineage
+        WHERE (prompt_status = 'rejected' OR image_status = 'rejected')
+          AND prompt_text IS NOT NULL
+          AND last_updated_at >= datetime('now', ?)
+        ORDER BY last_updated_at DESC
+        LIMIT 12
+        """,
+        (cutoff,),
+    ).fetchall()
+
+    return {
+        "rejected_by_category": [
+            {"category": r["category"],
+             "prompts_rejected": r["prompts_rejected"],
+             "images_rejected": r["images_rejected"]}
+            for r in by_category
+        ],
+        "recent_rejected_prompts": [
+            {"category": r["category"], "prompt_text": r["prompt_text"],
+             "rejected_at": r["rejected_at"], "ai_feedback": r["ai_feedback"]}
+            for r in samples
+        ],
+    }
+
+
 def load_feedback_signal(conn, weeks: int = 4) -> dict:
     """Return the feedback dict consumed by themes.generate_themes.
 
-    Cold-start sentinel when listing_stats is empty.
+    Cold-start sentinel when listing_stats is empty. Rejection data is
+    included in both branches — approval-gate rejections exist long before
+    the first published listing produces stats.
     """
+    rejection_signal = load_rejection_signal(conn, weeks=weeks)
     has_stats = conn.execute("SELECT 1 FROM listing_stats LIMIT 1").fetchone()
     if not has_stats:
         return {
@@ -448,6 +503,7 @@ def load_feedback_signal(conn, weeks: int = 4) -> dict:
             "underrepresented_categories": [],
             "winning_style_tags": [],
             "recently_explored_themes": [],
+            "rejection_signal": rejection_signal,
         }
 
     cutoff_days = weeks * 7
@@ -548,4 +604,5 @@ def load_feedback_signal(conn, weeks: int = 4) -> dict:
              "run_id": r["run_id"]}
             for r in recent_themes
         ],
+        "rejection_signal": rejection_signal,
     }
