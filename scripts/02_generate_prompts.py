@@ -104,6 +104,20 @@ def get_top_performers(conn) -> list[str]:
     return lines
 
 
+def get_rejected_lines(conn) -> list[str]:
+    """Recently rejected prompts/images (from db.load_rejection_signal) as
+    negative examples — the other half of the feedback loop."""
+    samples = db.load_rejection_signal(conn).get("recent_rejected_prompts") or []
+    lines = []
+    for s in samples:
+        snippet = (s["prompt_text"] or "").strip()[:160]
+        if not snippet:
+            continue
+        note = f" | AI note: {s['ai_feedback'][:80]}" if s.get("ai_feedback") else ""
+        lines.append(f"- [{s['category']}] rejected at {s['rejected_at']} gate: {snippet}{note}")
+    return lines
+
+
 def _build_brief_context(briefs: list[dict]) -> str:
     if not briefs:
         return ""
@@ -128,6 +142,7 @@ def generate_prompts_for_category(
     description: str,
     briefs: list[dict],
     top_lines: list[str],
+    rejected_lines: list[str],
 ) -> list[dict]:
     """Return list of {prompt, brief} — brief is the source brief or None."""
     performer_context = ""
@@ -139,12 +154,21 @@ def generate_prompts_for_category(
             + "\n".join(relevant)
         )
 
+    rejection_context = ""
+    if rejected_lines:
+        category_rejects = [l for l in rejected_lines if f"[{category}]" in l]
+        relevant_rejects = (category_rejects or rejected_lines)[:5]
+        rejection_context = (
+            "\n\nRecently REJECTED designs (avoid these directions and repeat mistakes):\n"
+            + "\n".join(relevant_rejects)
+        )
+
     brief_context = _build_brief_context(briefs)
 
     prompt = f"""You are a witty copywriter for a viral Etsy shop selling gym + corporate culture graphic tees.
 
 Category: {category}
-Category theme: {description}{brief_context}{performer_context}
+Category theme: {description}{brief_context}{performer_context}{rejection_context}
 
 Generate {PROMPTS_PER_CATEGORY} image generation prompts for screen-print t-shirt graphics in the "{category}" category. Each prompt must:
 - Have a funny, specific concept rooted in the category theme (not generic — think concrete moments)
@@ -175,13 +199,14 @@ conn = db.connect(DB_PATH)
 db.run_migrations(conn)
 
 top_lines = get_top_performers(conn)
+rejected_lines = get_rejected_lines(conn)
 all_prompts: list[dict] = []
 created_lineage_ids: list[str] = []
 
 for category, description in CATEGORIES.items():
     print(f"\n--- Generating prompts for: {category} ---")
     pairs = generate_prompts_for_category(
-        category, description, briefs_by_category[category], top_lines
+        category, description, briefs_by_category[category], top_lines, rejected_lines
     )
     for pair in pairs:
         prompt_text = pair["prompt"]

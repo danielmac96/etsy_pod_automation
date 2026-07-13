@@ -1,6 +1,6 @@
 # CLAUDE.md — Etsy POD Automation
 
-Self-iterating weekly pipeline for an Etsy print-on-demand shop selling gym + corporate-culture graphic tees. Scheduled jobs run Mon→Sun via GitHub Actions; the human-in-the-loop work happens in a **local Streamlit browser app** (`scripts/approve_app.py`). Three approval gates — prompts (Mon), images (Wed), publish (Thu) — sit exactly where money is spent, and each can be opened individually via `AUTO_*` env flags for a fully hands-off loop (see `AUTOMATION.md`). Last week's published-listing performance feeds back into Monday's theme generation, so each cycle biases toward what worked.
+Self-iterating weekly pipeline for an Etsy print-on-demand shop selling gym + corporate-culture graphic tees. Scheduled jobs run Mon→Sun via GitHub Actions; the human-in-the-loop work happens in a **local Streamlit browser app** (`scripts/approve_app.py`). Three approval gates — prompts (Mon), images (Wed), publish (Thu) — sit exactly where money is spent, and each can be opened individually via `AUTO_*` env flags for a fully hands-off loop (see `AUTOMATION.md`). Last week's published-listing performance **and** approval-gate rejections both feed back into Monday's theme + prompt generation, so each cycle biases toward what worked and away from what was rejected.
 
 ---
 
@@ -44,7 +44,7 @@ Six-stage Gemini + Etsy orchestrator. Reads the feedback signal from `pod.db` (c
 - **CLI:** `--dry-run`, `--cold-start`, `--seed`, `--n-themes`, `--listings-per-probe`, `--final-count`, `--db-path`
 
 ### `02_generate_prompts.py`
-Reads `design_briefs.json`, calls Gemini for 5 prompts × 5 categories, and inserts one `lineage` row per prompt via `db.lineage_create()` (`prompt_status='unreviewed'`). The "top performers" priming context is queried from `pod.db` listing_stats deltas.
+Reads `design_briefs.json`, calls Gemini for 5 prompts × 5 categories, and inserts one `lineage` row per prompt via `db.lineage_create()` (`prompt_status='unreviewed'`). Two priming contexts come from `pod.db`: "top performers" (listing_stats deltas) and "recently rejected" negative examples (`db.load_rejection_signal` — prompt/image-gate rejects plus AI screening notes), so weekly prompts steer toward winners and away from rejected directions.
 - **Reads:** `design_briefs.json`, `pod.db`, `GEMINI_API_KEY`
 - **Writes:** new `lineage` rows, `prompts.json` (audit log), `notify_context.json`
 - **APIs:** Gemini AI
@@ -67,7 +67,7 @@ Sends a stage-appropriate **multipart HTML email** after each pipeline phase. We
 - **Stage values:** `"prompts"` / `"images"` / `"drafts"` / `"published"`
 
 ### `06_printify_upload.py`
-Creates Printify product drafts for every design with generated copy.
+Creates **Etsy-ready** Printify product drafts for every design with generated copy — title, description, and the 13 SEO tags are all set on the product, so publishing (08) produces a complete Etsy listing with nothing left to edit. Product economics are user-configurable via env: `PRINTIFY_BLUEPRINT_ID` (default 6 = Gildan 5000), `PRINTIFY_PRINT_PROVIDER_ID` (99 = Printify Choice), `POD_PRICE_CENTS` (2499), `POD_VARIANT_COLORS` (`Black,White`), `POD_VARIANT_SIZES` (`S,M,L,XL`), `POD_PRINT_SCALE` (0.8). The variant catalog is fetched once per run. Payload assembly lives in `src/printify.py` (`select_variants`, `build_product_payload`, `sanitize_etsy_tags`).
 - **Reads:** `pod.db` rows where `etsy_title IS NOT NULL AND printify_draft_url IS NULL AND image_status='approved'` (via `lineage_pending_for_stage('draft_create')`)
 - **Writes:** Printify draft products, UPDATEs `lineage.printify_draft_url` + `draft_status='drafted'` (`publish_status` stays `'unreviewed'` — the Publish gate), `notify_context.json`
 - **APIs:** Printify
@@ -96,7 +96,7 @@ Streamlit single-file UI. Run with `streamlit run scripts/approve_app.py`.
 - `gemini_client.py` — `generate_json(client, prompt, *, schema=..., model=..., temperature=...)` with model fallback chain. Use everywhere; do not import `google.generativeai` directly.
 - `etsy_client.py` — token-bucket rate limiter (5 rps default), persistent daily quota in `<cache_dir>/quota.json`, sha256 cache keys, 24h TTL, 4-attempt backoff honoring `Retry-After`, MAX_OFFSET=12000, dual `sort_on` exposed to callers.
 - `schemas.py` — Pydantic v2 models: `EtsyListing`, `Evidence`, `DesignBrief` (carries `brief_id / concept_id / theme_id / run_id` UUIDs), `DesignBriefContent`, `ResearchRun`.
-- `src/db.py` — typed `connect`, `run_migrations`, dataclass insert helpers (`Theme`, `EtsyProbe`, `EtsyListingRow`, `Concept`, `DesignBriefRow`), **lineage helpers** (`lineage_create`, `lineage_upsert`, `lineage_set_prompt_status / set_image_status / set_draft_status`, `lineage_pending_for_stage`), `record_stats`, `load_feedback_signal`.
+- `src/db.py` — typed `connect`, `run_migrations`, dataclass insert helpers (`Theme`, `EtsyProbe`, `EtsyListingRow`, `Concept`, `DesignBriefRow`), **lineage helpers** (`lineage_create`, `lineage_upsert`, `lineage_set_prompt_status / set_image_status / set_draft_status`, `lineage_pending_for_stage`), `record_stats`, `load_feedback_signal`, `load_rejection_signal` (rejection half of the feedback loop — consumed by 01's feedback block and 02's negative examples).
 - `src/research/{feedback,themes,probes,mining,concepts,synthesis}.py` — pure stage modules, each takes a `gen_fn` callable so they're trivially mockable.
 
 ### `test_pipeline.py`
@@ -154,7 +154,7 @@ python scripts/test_pipeline.py dry-run 04    # title/description/tags for first
 
 ### Run the unit + integration suite
 ```bash
-pytest tests/                                  # 39 tests including phase-D smoke + warm-start loop
+pytest tests/                                  # 53 tests including phase-D smoke + warm-start loop
 ```
 
 ### Run a step manually
@@ -195,6 +195,10 @@ streamlit run scripts/approve_app.py           # the human approval UI
 | `AUTO_APPROVE_PROMPTS` | 02 (optional) | `1` opens the Monday prompt gate |
 | `AUTO_APPROVE_IMAGES` / `AUTO_APPROVE_IMAGE_MIN_SCORE` / `AUTO_REJECT_IMAGE_MAX_SCORE` | 03 (optional) | AI-screen-driven image gate behavior |
 | `AUTO_PUBLISH` | 08 (optional) | `1` opens the publish gate ($0.20/listing) |
+| `PRINTIFY_BLUEPRINT_ID` / `PRINTIFY_PRINT_PROVIDER_ID` | 06 (optional) | Printify catalog choice (defaults: 6 = Gildan 5000, 99 = Printify Choice) |
+| `POD_PRICE_CENTS` | 06 (optional) | Retail price per variant in cents (default 2499) |
+| `POD_VARIANT_COLORS` / `POD_VARIANT_SIZES` | 06 (optional) | Comma-separated enabled variant grid (defaults `Black,White` / `S,M,L,XL`) |
+| `POD_PRINT_SCALE` | 06 (optional) | Front print-area scale 0–1 (default 0.8) |
 | `GIT_PUSH_TOKEN` | local app (optional) | Fine-grained PAT so git pull/push works on a cloud-hosted app |
 | `POD_DB_PATH` | every script + local app | Override default `pod.db` location (optional) |
 
