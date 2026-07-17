@@ -15,9 +15,8 @@ from google import genai
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
-from gemini_client import generate_json
+from src.gemini_client import generate_json
 from src import db
 
 load_dotenv()
@@ -64,9 +63,9 @@ def main() -> None:
 
     pending = db.lineage_pending_for_stage(conn, "copy_gen")
     if not pending:
-        print("No images approved for copy generation. Approve images in the local app first.")
+        print("No images ready for copy generation.")
         Path("notify_context.json").write_text(
-            json.dumps({"count": 0, "stage": "copy", "detail": "No approved images found."}),
+            json.dumps({"count": 0, "stage": "copy", "detail": "No images ready for copy."}),
             encoding="utf-8",
         )
         conn.close()

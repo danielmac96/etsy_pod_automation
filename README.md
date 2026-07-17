@@ -2,7 +2,7 @@
 
 Self-iterating weekly pipeline for an Etsy print-on-demand graphic-tee shop. Generates design themes, validates them against live Etsy data, drafts product copy, uploads to Printify, and feeds last week's `favorites_delta` back into next Monday's theme generation.
 
-Two manual gates: **approve prompts in Notion on Monday, approve images on Wednesday.** Everything else is automated by GitHub Actions.
+**One manual gate:** approve prompts in the local app on Monday — the cost gate before paid image generation. Everything after that runs automatically.
 
 ## What's in the loop
 
@@ -16,10 +16,10 @@ research_runs → themes → etsy_probes → etsy_listings → concepts → desi
                                               load_feedback_signal (next week)
 ```
 
-- **Notion** — human approval UI (status field drives the pipeline)
-- **`pod.db`** (SQLite) — analytical brain; eight tables capture the unbroken chain from theme → published listing → weekly stats deltas
+- **`pod.db` (SQLite)** — sole system of record: analytical brain + human approval state. Eight tables capture the unbroken chain from theme → published listing → weekly stats deltas. Committed to git by every workflow so state survives across runs.
+- **Local Streamlit app** (`scripts/approve_app.py`) — the only human UI (Prompts + Stats tabs)
 - **Gemini 2.5 Flash** — themes, probes, concepts, synthesis, copy
-- **Etsy v3 + Printify v1** — market data + draft creation
+- **Etsy v3 (REST or MCP) + Printify v1** — market data + draft creation
 - **FAL.ai (Ideogram v3) + ImgBB** — image generation + hosting
 
 ## Quickstart
@@ -30,62 +30,45 @@ python -m venv .venv && source .venv/Scripts/activate   # bash on Windows
 pip install -r requirements.txt
 
 # 2. Configure
-cp .env.example .env           # then fill in keys
-#   GEMINI_API_KEY, NOTION_TOKEN, NOTION_DATABASE_ID, FAL_KEY, IMGBB_API_KEY,
-#   PRINTIFY_API_KEY, PRINTIFY_SHOP_ID, ETSY_API_KEY, ETSY_ACCESS_TOKEN,
-#   GMAIL_USER, GMAIL_APP_PASSWORD
+cp .env.example .env           # then fill in keys (see CLAUDE.md env-var table)
 
-# 3. Notion DB columns — see CLAUDE.md "Notion DB Properties"
-#    (Brief ID / Theme ID / Run ID rich-text columns are required for warm-start)
-
-# 4. First run (cold-start)
+# 3. First run (cold-start)
 python scripts/01_research.py --cold-start
 python scripts/02_generate_prompts.py
-# approve prompts in Notion …
+# approve prompts in the local app …
+streamlit run scripts/approve_app.py
+# then images → copy → drafts run automatically:
 python scripts/03_generate_images.py
-# approve images in Notion …
 python scripts/04_generate_copy.py
 python scripts/06_printify_upload.py
-# publish drafts in Printify, paste Etsy URL into Notion …
+# publish drafts in Printify; URLs auto-detect on Sunday:
 python scripts/07_track_stats.py
 
-# 5. Inspect
-python scripts/test_pipeline.py db
-python scripts/test_pipeline.py lineage <brief_id>
+# 4. Inspect anytime
+python scripts/health_check.py
 ```
 
-After the first weekly cycle, `python scripts/01_research.py` (no flag) loads `listing_stats` from `pod.db`, computes the feedback signal, and biases ~40% of next week's themes toward winners.
+After the first weekly cycle, `01_research.py` (no `--cold-start`) loads `listing_stats`, computes the feedback signal, and biases ~40% of next week's themes toward winners.
 
-## Workflow (Claude Tasks Edition)
+## Weekly schedule (GitHub Actions)
 
-| Schedule | Runner | Action |
-|----------|--------|--------|
-| Daily 9 AM | **Claude Task** | Checks Etsy listing stats via Etsy MCP, flags hot signals → Supabase |
-| Daily 9 AM | **Claude Task** | Web-searches cultural trend signals for active themes → Supabase |
-| Sunday 8 PM | **Claude Task** | Generates prioritized seed themes for next week → Supabase |
-| Monday AM | Python `01_research.py` | Reads seeds from Supabase, runs Etsy sampling, generates concepts |
-| Mon–Thu | Python (existing) | `02 → 03 → 04 → 06` unchanged |
-| Sun 9 AM | Python `07_track_stats.py` | Auto-detect Etsy URLs + stats sync + mirror state back to Supabase |
+| Schedule | Workflow | Action |
+|----------|----------|--------|
+| Mon 9am EST | `weekly.yml` | `01 → 02 → 05` (research + prompts + email) |
+| Wed 9am EST | `weekly_images.yml` | `03 → 04 → 06 → 05` (images + copy + drafts, fully automatic) |
+| Wed ~9:30am | `etsy_stats.yml` | `07` mid-week stats sync |
+| Sun 9am EST | `weekly_stats.yml` | `07` auto-detect Etsy URLs + stats sync |
 
-The two Claude Tasks live in claude.ai (Pro plan). See
-[`docs/claude_tasks_setup.md`](docs/claude_tasks_setup.md) for the exact
-prompts and schedule to paste.
+Each workflow commits `pod.db` after running, so state stays in sync with the local app. API keys live in **Settings → Secrets and variables → Actions**.
 
-### Etsy MCP (optional — richer data, set `ETSY_USE_MCP=1`)
+## Etsy MCP (richer market research — set `ETSY_USE_MCP=1`)
 
-```bash
-pip install uvx
-uvx etsy-mcp@latest
-```
-
-Required env vars: `ETSY_API_KEY`, `ETSY_REFRESH_TOKEN`, `ETSY_DEFAULT_SHOP_ID`.
-The MCP server handles OAuth token refresh automatically. The REST
-`EtsyClient` stays as the default when `ETSY_USE_MCP=0` (or unset).
+The `.mcp.json` configures a local Etsy MCP server (`mcp/etsy-mcp-server`) exposing `search_listings`, `get_trending_listings`, `get_shop` / `get_shop_listings`, `get_listing`, and `search_shops`. When `ETSY_USE_MCP=1`, `01_research.py` enriches theme generation with current Etsy trending tags. The REST `EtsyClient` is the default fallback (used by GitHub Actions, which have no local MCP server).
 
 ## Tests
 
 ```bash
-pytest tests/      # 36 tests including warm-start self-iteration smoke
+pytest tests/      # no network required
 ```
 
 ## Operational notes

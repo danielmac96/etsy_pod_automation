@@ -10,7 +10,7 @@ __pycache__/
 images/
 runs/
 
-# sqlite sidecars (regenerated on every connection)
+# sqlite sidecars (regenerated on every connection; pod.db itself IS committed)
 pod.db-shm
 pod.db-wal
 pod.db-journal
@@ -18,12 +18,11 @@ pod.db.pre-0002-backup
 
 # runtime / local state
 notify_context.json
-notion_ids.json
-keywords.json
-results.json
-prompts.json
 pipeline_debug.ipynb
 
 # IDE / tooling local state
 .idea/misc.xml
 .claude/
+
+# MCP tools
+mcp/

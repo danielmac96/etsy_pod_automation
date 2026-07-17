@@ -1,6 +1,6 @@
 # CLAUDE.md — Etsy POD Automation
 
-Self-iterating weekly pipeline for an Etsy print-on-demand shop selling gym + corporate-culture graphic tees. Scheduled jobs run Mon→Sun via GitHub Actions; the human-in-the-loop work happens in a **local Streamlit browser app** (`scripts/approve_app.py`). Three approval gates — prompts (Mon), images (Wed), publish (Thu) — sit exactly where money is spent, and each can be opened individually via `AUTO_*` env flags for a fully hands-off loop (see `AUTOMATION.md`). Last week's published-listing performance **and** approval-gate rejections both feed back into Monday's theme + prompt generation, so each cycle biases toward what worked and away from what was rejected.
+Self-iterating weekly pipeline for an Etsy print-on-demand shop selling gym + corporate-culture graphic tees. Scheduled jobs run Mon→Sun via GitHub Actions; the human-in-the-loop work happens in a **local Streamlit browser app** (`scripts/approve_app.py`). Two manual approval gates: prompts on Monday, images on Wednesday. Last week's published-listing performance feeds back into Monday's theme generation, so each cycle biases toward what worked.
 
 ---
 
@@ -20,18 +20,16 @@ GitHub Actions still drives the unattended steps on a cron schedule. `pod.db` is
 
 ```
 MON  01_research.py → 02_generate_prompts.py → 05_notify.py
-     [You: approve/reject prompts — or AUTO_APPROVE_PROMPTS=1]
-WED  03_generate_images.py (+ Gemini vision pre-screen) → 05_notify.py
-     [You: approve/reject images — AI auto-rejects garbled renders;
-      AUTO_APPROVE_IMAGES=1 auto-approves scores ≥ 8]
-THU  04_generate_copy.py → 06_printify_upload.py → (08 if AUTO_PUBLISH=1) → 05_notify.py
-     [You: approve drafts in the Publish tab — or AUTO_PUBLISH=1]
-FRI  08_publish_etsy.py → 05_notify.py  (publishes approved drafts via Printify API)
+     [You: open the local app, approve/reject prompts]
+WED  03_generate_images.py → 05_notify.py
+     [You: open the local app, approve/reject images]
+THU  04_generate_copy.py → 06_printify_upload.py → 05_notify.py
+     [You: publish drafts in Printify — that's it; URLs auto-detect on Sunday]
 SUN  07_track_stats.py  (auto-detects Etsy URLs by title, then syncs stats)
 ```
 
 The local app: `streamlit run scripts/approve_app.py` opens `http://localhost:8501`.
-Sidebar exposes "Pull latest pod.db" and "Push approvals" buttons that wrap `git pull --rebase` / `git add pod.db && git commit && git push` (set `GIT_PUSH_TOKEN` to make these work on a cloud host). Tabs: **Prompts** (Mon), **Images** (Wed gallery view, sorted by AI score), **Publish** (Thu — the $0.20 listing-fee gate), **Listings** (manual URL paste fallback), **Stats** (feedback signal dashboard). Each tab also has a "Run script now" button that invokes the next pipeline stage as a subprocess if you want to act between cron runs.
+Sidebar exposes "Pull latest pod.db" and "Push approvals" buttons that wrap `git pull --rebase` / `git add pod.db && git commit && git push`. Tabs: **Prompts** (Mon), **Images** (Wed gallery view), **Drafts** (Thu, with manual paste fallback), **Stats** (feedback signal dashboard). Each tab also has a "Run script now" button that invokes the next pipeline stage as a subprocess if you want to act between cron runs.
 
 ---
 
@@ -44,16 +42,16 @@ Six-stage Gemini + Etsy orchestrator. Reads the feedback signal from `pod.db` (c
 - **CLI:** `--dry-run`, `--cold-start`, `--seed`, `--n-themes`, `--listings-per-probe`, `--final-count`, `--db-path`
 
 ### `02_generate_prompts.py`
-Reads `design_briefs.json`, calls Gemini for 5 prompts × 5 categories, and inserts one `lineage` row per prompt via `db.lineage_create()` (`prompt_status='unreviewed'`). Two priming contexts come from `pod.db`: "top performers" (listing_stats deltas) and "recently rejected" negative examples (`db.load_rejection_signal` — prompt/image-gate rejects plus AI screening notes), so weekly prompts steer toward winners and away from rejected directions.
+Reads `design_briefs.json`, calls Gemini for 5 prompts × 5 categories, and inserts one `lineage` row per prompt via `db.lineage_create()` (`prompt_status='unreviewed'`). The "top performers" priming context is queried from `pod.db` listing_stats deltas.
 - **Reads:** `design_briefs.json`, `pod.db`, `GEMINI_API_KEY`
 - **Writes:** new `lineage` rows, `prompts.json` (audit log), `notify_context.json`
 - **APIs:** Gemini AI
 
 ### `03_generate_images.py`
-Generates images for every prompt the user approved, then pre-screens each with Gemini vision (0–10 print-readiness score stored in `lineage.ai_score` / `ai_feedback`). Scores ≤ `AUTO_REJECT_IMAGE_MAX_SCORE` (3) are auto-rejected; with `AUTO_APPROVE_IMAGES=1`, scores ≥ `AUTO_APPROVE_IMAGE_MIN_SCORE` (8) are auto-approved. Screening is skipped when `GEMINI_API_KEY` is unset.
+Generates images for every prompt the user approved.
 - **Reads:** `pod.db` rows where `prompt_status='approved' AND image_url IS NULL` (via `lineage_pending_for_stage('image_gen')`)
-- **Writes:** `images/*.png` locally, uploads to ImgBB, UPDATEs `lineage.image_url / ai_score / ai_feedback` + `image_status`, `images/results.json`, `notify_context.json`
-- **APIs:** FAL.ai (Ideogram v3), ImgBB, Gemini AI (vision pre-screen)
+- **Writes:** `images/*.png` locally, uploads to ImgBB, UPDATEs `lineage.image_url` + `image_status='unreviewed'`, `images/results.json`, `notify_context.json`
+- **APIs:** FAL.ai (Ideogram v3), ImgBB
 
 ### `04_generate_copy.py`
 Generates Etsy product copy (title ≤140 chars, 3-4 sentence description, 13 tags ≤20 chars each) for every approved image. Uses the shared `gemini_client.generate_json` (JSON mode + model fallback chain).
@@ -62,21 +60,15 @@ Generates Etsy product copy (title ≤140 chars, 3-4 sentence description, 13 ta
 - **APIs:** Gemini AI
 
 ### `05_notify.py`
-Sends a stage-appropriate **multipart HTML email** after each pipeline phase. Wednesday's email embeds inline image previews from ImgBB with AI pre-screen scores. All emails deep-link to the local app at `LOCAL_APP_URL` (default `http://localhost:8501`) with the relevant tab pre-selected via query param. Skips the email entirely for a zero-count `"published"` run.
+Sends a stage-appropriate **multipart HTML email** after each pipeline phase. Wednesday's email embeds inline image previews from ImgBB. All emails deep-link to the local app at `LOCAL_APP_URL` (default `http://localhost:8501`) with the relevant tab pre-selected via query param.
 - **Reads:** `notify_context.json` (`stage`, `count`, `detail`, `items`)
-- **Stage values:** `"prompts"` / `"images"` / `"drafts"` / `"published"`
+- **Stage values:** `"prompts"` / `"images"` / `"drafts"`
 
 ### `06_printify_upload.py`
-Creates **Etsy-ready** Printify product drafts for every design with generated copy — title, description, and the 13 SEO tags are all set on the product, so publishing (08) produces a complete Etsy listing with nothing left to edit. Product economics are user-configurable via env: `PRINTIFY_BLUEPRINT_ID` (default 6 = Gildan 5000), `PRINTIFY_PRINT_PROVIDER_ID` (99 = Printify Choice), `POD_PRICE_CENTS` (2499), `POD_VARIANT_COLORS` (`Black,White`), `POD_VARIANT_SIZES` (`S,M,L,XL`), `POD_PRINT_SCALE` (0.8). The variant catalog is fetched once per run. Payload assembly lives in `src/printify.py` (`select_variants`, `build_product_payload`, `sanitize_etsy_tags`).
+Creates Printify product drafts for every design with generated copy.
 - **Reads:** `pod.db` rows where `etsy_title IS NOT NULL AND printify_draft_url IS NULL AND image_status='approved'` (via `lineage_pending_for_stage('draft_create')`)
-- **Writes:** Printify draft products, UPDATEs `lineage.printify_draft_url` + `draft_status='drafted'` (`publish_status` stays `'unreviewed'` — the Publish gate), `notify_context.json`
+- **Writes:** Printify draft products, UPDATEs `lineage.printify_draft_url` + `draft_status='drafted'`, `notify_context.json`
 - **APIs:** Printify
-
-### `08_publish_etsy.py`
-Publishes approved Printify drafts to Etsy through the Printify publish API — replaces the manual "open Printify, click Publish" step. With `AUTO_PUBLISH=1` it first sweeps all `publish_review` rows through the gate. Always exits 0 so a partial failure never blocks the pod.db commit (which would cause republishes).
-- **Reads:** `pod.db` rows where `publish_status='approved' AND draft_status='drafted'` (via `lineage_pending_for_stage('publish')`)
-- **Writes:** Printify publish calls, UPDATEs `lineage.publish_status='published'`, `notify_context.json` (stage `"published"`)
-- **APIs:** Printify (`POST /shops/{id}/products/{pid}/publish.json`)
 
 ### `07_track_stats.py`
 Two passes against `pod.db`:
@@ -96,7 +88,7 @@ Streamlit single-file UI. Run with `streamlit run scripts/approve_app.py`.
 - `gemini_client.py` — `generate_json(client, prompt, *, schema=..., model=..., temperature=...)` with model fallback chain. Use everywhere; do not import `google.generativeai` directly.
 - `etsy_client.py` — token-bucket rate limiter (5 rps default), persistent daily quota in `<cache_dir>/quota.json`, sha256 cache keys, 24h TTL, 4-attempt backoff honoring `Retry-After`, MAX_OFFSET=12000, dual `sort_on` exposed to callers.
 - `schemas.py` — Pydantic v2 models: `EtsyListing`, `Evidence`, `DesignBrief` (carries `brief_id / concept_id / theme_id / run_id` UUIDs), `DesignBriefContent`, `ResearchRun`.
-- `src/db.py` — typed `connect`, `run_migrations`, dataclass insert helpers (`Theme`, `EtsyProbe`, `EtsyListingRow`, `Concept`, `DesignBriefRow`), **lineage helpers** (`lineage_create`, `lineage_upsert`, `lineage_set_prompt_status / set_image_status / set_draft_status`, `lineage_pending_for_stage`), `record_stats`, `load_feedback_signal`, `load_rejection_signal` (rejection half of the feedback loop — consumed by 01's feedback block and 02's negative examples).
+- `src/db.py` — typed `connect`, `run_migrations`, dataclass insert helpers (`Theme`, `EtsyProbe`, `EtsyListingRow`, `Concept`, `DesignBriefRow`), **lineage helpers** (`lineage_create`, `lineage_upsert`, `lineage_set_prompt_status / set_image_status / set_draft_status`, `lineage_pending_for_stage`), `record_stats`, `load_feedback_signal`.
 - `src/research/{feedback,themes,probes,mining,concepts,synthesis}.py` — pure stage modules, each takes a `gen_fn` callable so they're trivially mockable.
 
 ### `test_pipeline.py`
@@ -106,16 +98,15 @@ Inspection + validation + dry-run tool. Pure pod.db reads (with one exception: `
 
 ## Approval state
 
-The `lineage` table carries four orthogonal status columns:
+The `lineage` table carries three orthogonal status columns:
 
 | Column | Values | Set by |
 |---|---|---|
-| `prompt_status`  | `unreviewed` / `approved` / `rejected` | local app (Mon); 02 auto-approves with `AUTO_APPROVE_PROMPTS=1` |
-| `image_status`   | `unreviewed` / `approved` / `rejected` | 03 sets from the AI pre-screen (auto-reject ≤3, auto-approve ≥8 when `AUTO_APPROVE_IMAGES=1`, else `unreviewed`); local app (Wed) |
-| `publish_status` | `unreviewed` / `approved` / `rejected` / `published` | local app Publish tab (Thu) or `AUTO_PUBLISH=1`; 08 sets `published` |
-| `draft_status`   | `pending` / `drafted` / `published`    | 06 sets `drafted`; 07 auto-detect sets `published` |
+| `prompt_status` | `unreviewed` / `approved` / `rejected` | local app (Mon) |
+| `image_status`  | `unreviewed` / `approved` / `rejected` | 03 sets `unreviewed`; local app (Wed) |
+| `draft_status`  | `pending` / `drafted` / `published`    | 06 sets `drafted`; 07 auto-detect sets `published` |
 
-A row "moves through the pipeline" by combinations of these plus the presence of `image_url`, `etsy_title`, `printify_draft_url`, `etsy_listing_url`. `db.lineage_pending_for_stage(stage)` is the single helper that returns "what's ready for stage X" — every script and the local app go through it. `lineage.ai_score` / `ai_feedback` hold the Gemini vision pre-screen result.
+A row "moves through the pipeline" by combinations of these three plus the presence of `image_url`, `etsy_title`, `printify_draft_url`, `etsy_listing_url`. `db.lineage_pending_for_stage(stage)` is the single helper that returns "what's ready for stage X" — every script and the local app go through it.
 
 ---
 
@@ -154,7 +145,7 @@ python scripts/test_pipeline.py dry-run 04    # title/description/tags for first
 
 ### Run the unit + integration suite
 ```bash
-pytest tests/                                  # 53 tests including phase-D smoke + warm-start loop
+pytest tests/                                  # 39 tests including phase-D smoke + warm-start loop
 ```
 
 ### Run a step manually
@@ -166,7 +157,6 @@ python scripts/03_generate_images.py
 python scripts/04_generate_copy.py
 python scripts/06_printify_upload.py
 python scripts/07_track_stats.py
-python scripts/08_publish_etsy.py              # publish approved drafts to Etsy
 streamlit run scripts/approve_app.py           # the human approval UI
 ```
 
@@ -186,20 +176,11 @@ streamlit run scripts/approve_app.py           # the human approval UI
 | `GMAIL_USER` | 05 | Gmail send address |
 | `GMAIL_APP_PASSWORD` | 05 | Gmail app password |
 | `LOCAL_APP_URL` | 05 (optional) | Override the deep-link in emails (default `http://localhost:8501`) |
-| `PRINTIFY_API_KEY` | 06, 08 | Printify API |
-| `PRINTIFY_SHOP_ID` | 06, 08 | Printify shop ID |
+| `PRINTIFY_API_KEY` | 06 | Printify API |
+| `PRINTIFY_SHOP_ID` | 06 | Printify shop ID |
 | `ETSY_API_KEY` | 01, 07 | Etsy keystring (`x-api-key`) |
-| `ETSY_ACCESS_TOKEN` | 07 (fallback) | Static Etsy OAuth2 bearer token (expires in 1h — prefer refresh token) |
-| `ETSY_REFRESH_TOKEN` | 07 | 90-day refresh token; `src/etsy_auth.py` mints a fresh access token per run |
+| `ETSY_ACCESS_TOKEN` | 07 | Etsy OAuth2 bearer token (scope `listings_r`) |
 | `ETSY_SHOP_ID` | 07 (optional) | Numeric Etsy shop ID — required for the auto-detect step that eliminates the Thursday URL paste |
-| `AUTO_APPROVE_PROMPTS` | 02 (optional) | `1` opens the Monday prompt gate |
-| `AUTO_APPROVE_IMAGES` / `AUTO_APPROVE_IMAGE_MIN_SCORE` / `AUTO_REJECT_IMAGE_MAX_SCORE` | 03 (optional) | AI-screen-driven image gate behavior |
-| `AUTO_PUBLISH` | 08 (optional) | `1` opens the publish gate ($0.20/listing) |
-| `PRINTIFY_BLUEPRINT_ID` / `PRINTIFY_PRINT_PROVIDER_ID` | 06 (optional) | Printify catalog choice (defaults: 6 = Gildan 5000, 99 = Printify Choice) |
-| `POD_PRICE_CENTS` | 06 (optional) | Retail price per variant in cents (default 2499) |
-| `POD_VARIANT_COLORS` / `POD_VARIANT_SIZES` | 06 (optional) | Comma-separated enabled variant grid (defaults `Black,White` / `S,M,L,XL`) |
-| `POD_PRINT_SCALE` | 06 (optional) | Front print-area scale 0–1 (default 0.8) |
-| `GIT_PUSH_TOKEN` | local app (optional) | Fine-grained PAT so git pull/push works on a cloud-hosted app |
 | `POD_DB_PATH` | every script + local app | Override default `pod.db` location (optional) |
 
 ---
@@ -210,8 +191,7 @@ streamlit run scripts/approve_app.py           # the human approval UI
 |---|---|---|
 | `weekly.yml` | Mon 9am EST | 01 → 02 → 05 → commit pod.db |
 | `weekly_images.yml` | Wed 9am EST | 03 → 05 → commit pod.db |
-| `weekly_copy_and_draft.yml` | Thu 9am EST | 04 → 06 → (08 when `AUTO_PUBLISH=1`) → 05 → commit pod.db |
-| `weekly_publish.yml` | Fri 9am EST | 08 (publish approved drafts) → 05 → commit pod.db |
+| `weekly_copy_and_draft.yml` | Thu 9am EST | 04 → 06 → 05 → commit pod.db |
 | `weekly_stats.yml` | Sun 9am EST | 07 (auto-detect + stats sync) → commit pod.db |
 | `etsy_stats.yml` | Wed ~9:30am EST | 07 (mid-week stats sync) → commit pod.db |
 
@@ -229,10 +209,10 @@ Eight tables, one analytical brain. `schema_migrations` is bootstrapped in code;
 - `etsy_listings` — all listings ever seen, keyed by `(listing_id, probe_id)`
 - `concepts` — Gemini-extracted per-theme concepts; `selected=1` once promoted to a brief
 - `design_briefs` — final ranked briefs; mirrors `design_briefs.json` row-for-row
-- `lineage` — one row per design candidate; carries `lineage_id` (synthetic UUID, primary key), `brief_id`, `prompt_text / image_url / printify_draft_url / etsy_listing_url`, the four status columns, `ai_score`/`ai_feedback`, and the Etsy copy fields. **System of record for human approval state.**
+- `lineage` — one row per design candidate; carries `lineage_id` (synthetic UUID, primary key), `brief_id`, `prompt_text / image_url / printify_draft_url / etsy_listing_url`, the three status columns, and the Etsy copy fields. **System of record for human approval state.**
 - `listing_stats` — append-only stats snapshots; `views_delta` / `favorites_delta` computed against the previous snapshot for the same `lineage_id`
 
-Migration `0002_local_approval.sql` renamed the historical `notion_page_id` column to `lineage_id`, added the three status columns + Etsy copy fields, added indexes, and backfilled historical rows so the feedback signal keeps working. Migration `0004_publish_automation.sql` added `publish_status` (the Etsy-listing-fee cost gate consumed by script 08) plus the `ai_score`/`ai_feedback` pre-screen columns.
+Migration `0002_local_approval.sql` renamed the historical `notion_page_id` column to `lineage_id`, added the three status columns + Etsy copy fields, added indexes, and backfilled historical rows so the feedback signal keeps working.
 
 ---
 

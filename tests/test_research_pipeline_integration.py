@@ -37,7 +37,7 @@ class _FakeSearchResult:
 class _FakeEtsy:
     """Returns parsed EtsyListings from the fixture for every search."""
     def __init__(self):
-        from schemas import EtsyListing
+        from src.schemas import EtsyListing
         raw = json.loads(FIXTURE.read_text(encoding="utf-8"))
         self._listings = [EtsyListing.from_v3(r) for r in raw["results"]]
         self.calls = []

@@ -1,7 +1,7 @@
-name: Etsy stats sync (mid-week)
+name: Etsy Stats Sync (mid-week)
 on:
   schedule:
-    - cron: '30 14 * * 3'  # Wednesdays ~9:30am EST (UTC varies)
+    - cron: '30 14 * * 3'  # Wednesday ~9:30am EST
   workflow_dispatch:
 
 jobs:
@@ -15,7 +15,9 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python scripts/07_track_stats.py
+
+      - name: Sync listing stats (mid-week)
+        run: python scripts/07_track_stats.py
         env:
           ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
           ETSY_ACCESS_TOKEN: ${{ secrets.ETSY_ACCESS_TOKEN }}

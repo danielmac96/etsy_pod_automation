@@ -18,7 +18,7 @@ import os
 import random
 import sys
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 
@@ -27,11 +27,10 @@ from google import genai
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from gemini_client import generate_json
-from schemas import (
+from src.gemini_client import generate_json
+from src.schemas import (
     DesignBrief, DesignBriefContent, Evidence, ResearchRun,
 )
 from src import db
@@ -40,9 +39,8 @@ from src.research import probes as probe_mod
 from src.research import synthesis as synth_mod
 from src.research import themes as theme_mod
 from src.etsy_factory import get_etsy_client
-from src.research.feedback import format_feedback_for_gemini, load_feedback_signal
+from src.research.feedback import format_feedback_for_gemini
 from src.research.mining import mine_theme
-from supabase_sync import mark_seeds_used, read_research_seeds_for_run
 
 load_dotenv()
 
@@ -106,7 +104,7 @@ def _log(name: str, payload) -> None:
 
 # ── 1. Feedback signal ────────────────────────────────────────────────────────
 print(f"[01] Loading feedback signal (db={args.db_path})…")
-signal = load_feedback_signal(conn) if not args.cold_start else {
+signal = db.load_feedback_signal(conn) if not args.cold_start else {
     "is_cold_start": True, "weeks_analyzed": 0, "top_winning_briefs": [],
     "underrepresented_categories": [], "winning_style_tags": [],
     "recently_explored_themes": [],
@@ -117,31 +115,27 @@ print(f"    cold_start={signal.get('is_cold_start')}, "
       f"recent_themes={len(signal.get('recently_explored_themes') or [])}")
 _log("01_feedback_signal", signal)
 
-# ── 1b. Claude Task seeds (Supabase) ──────────────────────────────────────────
-# Pull this week's priority seeds Claude generated overnight. If Supabase is
-# unreachable or empty, fall back to the feedback signal alone.
-today = date.today()
-this_monday = today - timedelta(days=today.weekday())
-supabase_seeds = read_research_seeds_for_run(this_monday)
-if supabase_seeds:
-    high = [s for s in supabase_seeds if (s.get("priority_score") or 0) >= 0.7]
-    standard = [s for s in supabase_seeds if (s.get("priority_score") or 0) < 0.7]
-    print(f"    Claude Task seeds: {len(supabase_seeds)} ({len(high)} high-priority, {len(standard)} standard)")
-    seed_lines = ["", "## Claude Task seeds (this week, in priority order)"]
-    for s in supabase_seeds:
-        seed_lines.append(
-            f"- [{s.get('seed_type','?')} score={float(s.get('priority_score') or 0):.2f} "
-            f"verdict={s.get('trend_verdict') or '-'}] {s.get('seed_text','')}"
-            + (f" — {s['trend_reasoning']}" if s.get("trend_reasoning") else "")
-        )
-    seed_lines.append(
-        "\nWeight HIGH-PRIORITY (score ≥ 0.7) seeds toward EXPLOIT/EXPLORE theme generation; "
-        "STANDARD seeds belong in UNDERREPRESENTED."
-    )
-    feedback_block = feedback_block + "\n" + "\n".join(seed_lines)
-    _log("01b_supabase_seeds", supabase_seeds)
-else:
-    print("    No Claude Task seeds in Supabase — running on feedback signal only")
+# ── 1b. Etsy trending enrichment (MCP only) ───────────────────────────────────
+# Pulls get_trending_listings to weight theme generation toward what's hot now.
+# Silently skipped when ETSY_USE_MCP is not set (REST client has no trending endpoint).
+if os.environ.get("ETSY_USE_MCP") == "1":
+    try:
+        from collections import Counter
+        trending_raw = etsy.get_trending_listings(limit=50)
+        tag_counter: Counter = Counter()
+        for item in trending_raw:
+            for tag in (item.get("tags") or []):
+                tag_counter[str(tag).lower()] += 1
+        top_trending_tags = [t for t, _ in tag_counter.most_common(15)]
+        if top_trending_tags:
+            feedback_block += (
+                "\n\n## Etsy trending tags (weight toward these in theme generation):\n"
+                + "\n".join(f"- {t}" for t in top_trending_tags)
+            )
+            _log("01c_trending_tags", {"tags": top_trending_tags, "total_items": len(trending_raw)})
+        print(f"    Trending enrichment: {len(top_trending_tags)} tags from {len(trending_raw)} listings")
+    except Exception as exc:
+        print(f"    Trending enrichment skipped (non-fatal): {exc}")
 
 # ── 2. Create research_run row ────────────────────────────────────────────────
 config = {
@@ -352,9 +346,6 @@ for b in brief_rows:
 )
 
 db.finish_run(conn, run_id)
-
-if supabase_seeds:
-    mark_seeds_used(run_id, [s["seed_text"] for s in supabase_seeds if s.get("seed_text")])
 
 conn.close()
 

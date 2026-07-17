@@ -26,9 +26,8 @@ from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
-from src import db as pod_db
+from src import db
 from src.etsy_auth import get_access_token
 
 load_dotenv()
@@ -108,7 +107,7 @@ def _build_listing_url(listing: dict) -> str:
 
 def auto_detect_etsy_urls(conn, shop_id: str) -> int:
     """Match Drafted rows missing an Etsy URL to live shop listings by title."""
-    pending = pod_db.lineage_pending_for_stage(conn, "etsy_publish")
+    pending = db.lineage_pending_for_stage(conn, "etsy_publish")
     if not pending:
         return 0
     print(f"\n--- Auto-detect: {len(pending)} draft(s) awaiting an Etsy URL ---")
@@ -136,8 +135,8 @@ def auto_detect_etsy_urls(conn, shop_id: str) -> int:
         url = _build_listing_url(L)
         if not url:
             continue
-        pod_db.lineage_upsert(conn, row["lineage_id"], etsy_listing_url=url)
-        pod_db.lineage_set_draft_status(conn, row["lineage_id"], "published")
+        db.lineage_upsert(conn, row["lineage_id"], etsy_listing_url=url)
+        db.lineage_set_draft_status(conn, row["lineage_id"], "published")
         matched += 1
         print(f"  Matched {row['lineage_id'][:8]} → {url}")
     print(f"  {matched}/{len(pending)} draft(s) auto-published")
@@ -146,7 +145,7 @@ def auto_detect_etsy_urls(conn, shop_id: str) -> int:
 
 def sync_stats(conn) -> int:
     """Snapshot views/favorites for every published lineage row."""
-    rows = pod_db.lineage_pending_for_stage(conn, "stats_sync")
+    rows = db.lineage_pending_for_stage(conn, "stats_sync")
     if not rows:
         print("\nNo published listings to sync.")
         return 0
@@ -166,13 +165,9 @@ def sync_stats(conn) -> int:
             continue
         new_views = int(stats.get("views") or 0)
         new_favs = int(stats.get("num_favorers") or 0)
-        snapshot_id = pod_db.record_stats(conn, lid, new_views, new_favs)
-        delta_row = conn.execute(
-            "SELECT views_delta, favorites_delta FROM listing_stats WHERE snapshot_id = ?",
-            (snapshot_id,),
-        ).fetchone()
-        vd = delta_row["views_delta"] if delta_row["views_delta"] is not None else "n/a"
-        fd = delta_row["favorites_delta"] if delta_row["favorites_delta"] is not None else "n/a"
+        deltas = db.record_stats(conn, lid, new_views, new_favs)
+        vd = deltas.get("views_delta") if deltas.get("views_delta") is not None else "n/a"
+        fd = deltas.get("favorites_delta") if deltas.get("favorites_delta") is not None else "n/a"
         print(f"Listing {listing_id}: views={new_views} (delta {vd}), favs={new_favs} (delta {fd})")
         synced += 1
     return synced
@@ -185,8 +180,8 @@ def main() -> None:
         print("Warning: no Etsy OAuth token — set ETSY_REFRESH_TOKEN (auto-refresh, "
               "recommended) or ETSY_ACCESS_TOKEN; requests may fail.")
 
-    conn = pod_db.connect(DB_PATH)
-    pod_db.run_migrations(conn)
+    conn = db.connect(DB_PATH)
+    db.run_migrations(conn)
 
     if ETSY_SHOP_ID:
         auto_detect_etsy_urls(conn, ETSY_SHOP_ID)
@@ -195,16 +190,6 @@ def main() -> None:
               "have new listings discovered automatically by title.")
 
     sync_stats(conn)
-
-    # Mirror live listing + concept state into Supabase so Claude Tasks
-    # can read it. No-op when SUPABASE_URL is unset.
-    try:
-        from supabase_sync import sync_approved_concepts, sync_live_listings
-        n_live = sync_live_listings(conn)
-        n_concepts = sync_approved_concepts(conn)
-        print(f"Supabase sync: {n_live} live listings, {n_concepts} approved concepts")
-    except Exception as e:
-        print(f"Supabase sync skipped: {e}")
 
     conn.close()
 

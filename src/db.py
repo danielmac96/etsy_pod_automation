@@ -276,14 +276,12 @@ def insert_briefs(conn, briefs: list[DesignBriefRow]) -> list[str]:
 LINEAGE_FIELDS = (
     "brief_id", "prompt_text", "image_url", "printify_draft_url", "etsy_listing_url",
     "category", "etsy_title", "etsy_description", "etsy_tags_json",
-    "prompt_status", "image_status", "draft_status", "publish_status",
-    "ai_score", "ai_feedback",
+    "prompt_status", "image_status", "draft_status",
 )
 
-_PROMPT_STATUSES  = {"unreviewed", "approved", "rejected"}
-_IMAGE_STATUSES   = {"unreviewed", "approved", "rejected"}
-_DRAFT_STATUSES   = {"pending", "drafted", "published"}
-_PUBLISH_STATUSES = {"unreviewed", "approved", "rejected", "published"}
+_PROMPT_STATUSES = {"unreviewed", "approved", "rejected"}
+_IMAGE_STATUSES  = {"unreviewed", "approved", "rejected"}
+_DRAFT_STATUSES  = {"pending", "drafted", "published"}
 
 
 def lineage_create(
@@ -365,16 +363,6 @@ def lineage_set_draft_status(conn, lineage_id: str, status: str) -> None:
     conn.commit()
 
 
-def lineage_set_publish_status(conn, lineage_id: str, status: str) -> None:
-    if status not in _PUBLISH_STATUSES:
-        raise ValueError(f"publish_status must be one of {_PUBLISH_STATUSES}, got {status!r}")
-    conn.execute(
-        "UPDATE lineage SET publish_status = ?, last_updated_at = ? WHERE lineage_id = ?",
-        (status, _now(), lineage_id),
-    )
-    conn.commit()
-
-
 def lineage_pending_for_stage(conn, stage: str) -> list[sqlite3.Row]:
     """Return lineage rows that are ready for the next pipeline stage.
 
@@ -385,26 +373,19 @@ def lineage_pending_for_stage(conn, stage: str) -> list[sqlite3.Row]:
       'copy_gen'       — image_status='approved' AND etsy_title IS NULL (script 04)
       'draft_create'   — etsy_title IS NOT NULL AND printify_draft_url IS NULL
                          AND image_status='approved' (script 06)
-      'publish_review' — draft_status='drafted' AND publish_status='unreviewed'
-                         (Streamlit Publish tab — the Etsy-listing-fee cost gate)
-      'publish'        — publish_status='approved' AND draft_status='drafted'
-                         AND printify_draft_url IS NOT NULL (script 08)
       'etsy_publish'   — draft_status='drafted' AND etsy_listing_url IS NULL
-                         (Streamlit Listings tab + script 07 auto-detect)
+                         (Streamlit Thu tab + script 07 auto-detect)
       'stats_sync'     — etsy_listing_url IS NOT NULL (script 07)
     """
     where = {
-        "prompt_review":  "prompt_status = 'unreviewed'",
-        "image_gen":      "prompt_status = 'approved' AND image_url IS NULL",
-        "image_review":   "image_status = 'unreviewed' AND image_url IS NOT NULL",
-        "copy_gen":       "image_status = 'approved' AND etsy_title IS NULL",
-        "draft_create":   "etsy_title IS NOT NULL AND printify_draft_url IS NULL "
-                          "AND image_status = 'approved'",
-        "publish_review": "draft_status = 'drafted' AND publish_status = 'unreviewed'",
-        "publish":        "publish_status = 'approved' AND draft_status = 'drafted' "
-                          "AND printify_draft_url IS NOT NULL",
-        "etsy_publish":   "draft_status = 'drafted' AND etsy_listing_url IS NULL",
-        "stats_sync":     "etsy_listing_url IS NOT NULL",
+        "prompt_review": "prompt_status = 'unreviewed'",
+        "image_gen":     "prompt_status = 'approved' AND image_url IS NULL",
+        "image_review":  "image_status = 'unreviewed' AND image_url IS NOT NULL",
+        "copy_gen":      "image_status = 'approved' AND etsy_title IS NULL",
+        "draft_create":  "etsy_title IS NOT NULL AND printify_draft_url IS NULL "
+                         "AND image_status = 'approved'",
+        "etsy_publish":  "draft_status = 'drafted' AND etsy_listing_url IS NULL",
+        "stats_sync":    "etsy_listing_url IS NOT NULL",
     }.get(stage)
     if where is None:
         raise ValueError(f"unknown stage {stage!r}")
@@ -434,66 +415,11 @@ def record_stats(conn, lineage_id: str, views: int, favorites: int) -> int:
 
 # ── feedback signal ───────────────────────────────────────────────────────────
 
-def load_rejection_signal(conn, weeks: int = 4) -> dict:
-    """Aggregate human/AI rejections so generation stages can steer away
-    from directions that keep getting rejected at the prompt or image gate.
-
-    Rejections accumulate before the first listing ever ships, so this is
-    available even during a cold start (unlike listing_stats).
-    """
-    cutoff = f"-{weeks * 7} days"
-
-    by_category = conn.execute(
-        """
-        SELECT COALESCE(category, '?') AS category,
-               SUM(CASE WHEN prompt_status = 'rejected' THEN 1 ELSE 0 END) AS prompts_rejected,
-               SUM(CASE WHEN image_status  = 'rejected' THEN 1 ELSE 0 END) AS images_rejected
-        FROM lineage
-        WHERE (prompt_status = 'rejected' OR image_status = 'rejected')
-          AND last_updated_at >= datetime('now', ?)
-        GROUP BY COALESCE(category, '?')
-        ORDER BY prompts_rejected + images_rejected DESC
-        """,
-        (cutoff,),
-    ).fetchall()
-
-    samples = conn.execute(
-        """
-        SELECT category, prompt_text, ai_feedback,
-               CASE WHEN prompt_status = 'rejected' THEN 'prompt' ELSE 'image' END AS rejected_at
-        FROM lineage
-        WHERE (prompt_status = 'rejected' OR image_status = 'rejected')
-          AND prompt_text IS NOT NULL
-          AND last_updated_at >= datetime('now', ?)
-        ORDER BY last_updated_at DESC
-        LIMIT 12
-        """,
-        (cutoff,),
-    ).fetchall()
-
-    return {
-        "rejected_by_category": [
-            {"category": r["category"],
-             "prompts_rejected": r["prompts_rejected"],
-             "images_rejected": r["images_rejected"]}
-            for r in by_category
-        ],
-        "recent_rejected_prompts": [
-            {"category": r["category"], "prompt_text": r["prompt_text"],
-             "rejected_at": r["rejected_at"], "ai_feedback": r["ai_feedback"]}
-            for r in samples
-        ],
-    }
-
-
 def load_feedback_signal(conn, weeks: int = 4) -> dict:
     """Return the feedback dict consumed by themes.generate_themes.
 
-    Cold-start sentinel when listing_stats is empty. Rejection data is
-    included in both branches — approval-gate rejections exist long before
-    the first published listing produces stats.
+    Cold-start sentinel when listing_stats is empty.
     """
-    rejection_signal = load_rejection_signal(conn, weeks=weeks)
     has_stats = conn.execute("SELECT 1 FROM listing_stats LIMIT 1").fetchone()
     if not has_stats:
         return {
@@ -503,7 +429,6 @@ def load_feedback_signal(conn, weeks: int = 4) -> dict:
             "underrepresented_categories": [],
             "winning_style_tags": [],
             "recently_explored_themes": [],
-            "rejection_signal": rejection_signal,
         }
 
     cutoff_days = weeks * 7
@@ -604,5 +529,4 @@ def load_feedback_signal(conn, weeks: int = 4) -> dict:
              "run_id": r["run_id"]}
             for r in recent_themes
         ],
-        "rejection_signal": rejection_signal,
     }

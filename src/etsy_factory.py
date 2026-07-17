@@ -11,15 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-# scripts/etsy_client.py lives in scripts/, not src/ — make it importable.
-_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 
 def get_etsy_client(
@@ -37,7 +31,7 @@ def get_etsy_client(
         logger.info("Etsy backend: MCP (ETSY_USE_MCP=1)")
         return EtsyMcpClient()
 
-    from etsy_client import EtsyClient  # type: ignore[import-not-found]
+    from src.etsy_client import EtsyClient
 
     api_key = os.environ.get("ETSY_API_KEY", "")
     if cache_dir is None:

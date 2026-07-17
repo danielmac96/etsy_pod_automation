@@ -20,9 +20,8 @@ from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
-from src import db as pod_db
+from src import db
 from src import printify
 
 load_dotenv()
@@ -40,10 +39,10 @@ PRINT_SCALE = float(os.environ.get("POD_PRINT_SCALE", "0.8"))
 
 pfy_headers = printify.headers(PRINTIFY_KEY)
 
-conn = pod_db.connect(DB_PATH)
-pod_db.run_migrations(conn)
+conn = db.connect(DB_PATH)
+db.run_migrations(conn)
 
-candidates = pod_db.lineage_pending_for_stage(conn, "draft_create")
+candidates = db.lineage_pending_for_stage(conn, "draft_create")
 
 drafts_created = 0
 draft_items: list[dict] = []
@@ -128,8 +127,8 @@ for row in candidates:
 
     draft_url = f"https://printify.com/app/shop/{SHOP_ID}/products/{pid}/edit"
 
-    pod_db.lineage_upsert(conn, lineage_id, printify_draft_url=draft_url)
-    pod_db.lineage_set_draft_status(conn, lineage_id, "drafted")
+    db.lineage_upsert(conn, lineage_id, printify_draft_url=draft_url)
+    db.lineage_set_draft_status(conn, lineage_id, "drafted")
     drafts_created += 1
     draft_items.append({
         "lineage_id": lineage_id,

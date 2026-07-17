@@ -8,9 +8,8 @@ from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(PROJECT_ROOT))
-from gemini_client import generate_json
+from src.gemini_client import generate_json
 from src import db
 from src.config import auto_approve_prompts
 
@@ -65,42 +64,18 @@ def load_design_briefs() -> tuple[dict[str, list[dict]], dict]:
     return briefs_by_category, meta
 
 
-def get_top_performers(conn) -> list[str]:
-    """Pull recent winners directly from pod.db's listing_stats deltas."""
-    rows = conn.execute(
-        """
-        SELECT b.category, b.headline_text, l.prompt_text,
-               COALESCE(SUM(s.favorites_delta), 0) AS fav_total,
-               COALESCE(SUM(s.views_delta), 0)     AS views_total,
-               (SELECT favorites FROM listing_stats s2
-                  WHERE s2.lineage_id = l.lineage_id
-                  ORDER BY snapshot_at DESC LIMIT 1) AS last_favs,
-               (SELECT views     FROM listing_stats s2
-                  WHERE s2.lineage_id = l.lineage_id
-                  ORDER BY snapshot_at DESC LIMIT 1) AS last_views
-        FROM listing_stats s
-        JOIN lineage l       ON l.lineage_id = s.lineage_id
-        JOIN design_briefs b ON b.brief_id   = l.brief_id
-        WHERE s.favorites_delta IS NOT NULL
-          AND s.snapshot_at >= datetime('now', '-28 days')
-        GROUP BY l.lineage_id
-        ORDER BY fav_total DESC
-        LIMIT 8
-        """
-    ).fetchall()
-
+def _format_top_performers(rows: list[dict]) -> list[str]:
     lines = []
     for r in rows[:5]:
-        text = (r["prompt_text"] or r["headline_text"] or "").strip()
+        text = (r.get("prompt_text") or r.get("headline_text") or "").strip()
         if not text:
             continue
         snippet = text[:200] + ("..." if len(text) > 200 else "")
-        bit = (
-            f"- [{r['category']}] {snippet} | "
-            f"favs={r['last_favs'] or 0}, views={r['last_views'] or 0}, "
-            f"favs_delta={r['fav_total']}, views_delta={r['views_total']}"
+        lines.append(
+            f"- [{r.get('category','')}] {snippet} | "
+            f"favs={r.get('last_favs') or 0}, views={r.get('last_views') or 0}, "
+            f"favs_delta={r.get('fav_total', 0)}, views_delta={r.get('views_total', 0)}"
         )
-        lines.append(bit)
     return lines
 
 
@@ -198,7 +173,7 @@ briefs_by_category, briefs_meta = load_design_briefs()
 conn = db.connect(DB_PATH)
 db.run_migrations(conn)
 
-top_lines = get_top_performers(conn)
+top_lines = _format_top_performers(db.get_top_performers(conn))
 rejected_lines = get_rejected_lines(conn)
 all_prompts: list[dict] = []
 created_lineage_ids: list[str] = []

@@ -216,11 +216,15 @@ def test_lineage_pending_for_stage(fresh_conn):
     pending_image_gen = db.lineage_pending_for_stage(fresh_conn, "image_gen")
     assert {r["lineage_id"] for r in pending_image_gen} == {a}
 
+    # Single approval gate: once a prompt is approved and has an image, it is
+    # immediately ready for copy generation — no separate image-review gate.
     db.lineage_upsert(fresh_conn, a, image_url="https://x")
-    db.lineage_set_image_status(fresh_conn, a, "approved")
     pending_copy = db.lineage_pending_for_stage(fresh_conn, "copy_gen")
     assert {r["lineage_id"] for r in pending_copy} == {a}
 
+    # The image_review stage was removed — it must raise like any unknown stage.
+    with pytest.raises(ValueError):
+        db.lineage_pending_for_stage(fresh_conn, "image_review")
     with pytest.raises(ValueError):
         db.lineage_pending_for_stage(fresh_conn, "nope")
 

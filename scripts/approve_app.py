@@ -4,11 +4,7 @@ Run with:
     streamlit run scripts/approve_app.py
 
 Reads and writes pod.db directly. Replaces the Notion approval UI.
-Tabs: Prompts (Mon) → Images (Wed) → Publish (Thu) → Listings → Stats.
-
-Also deployable to Streamlit Community Cloud for approve-from-anywhere:
-set GIT_PUSH_TOKEN (a GitHub fine-grained PAT with contents:write) in the
-app's secrets and the git sync buttons will push over HTTPS with it.
+Tabs: Prompts (Mon) → Images (Wed) → Drafts (Thu) → Stats.
 """
 from __future__ import annotations
 
@@ -48,33 +44,14 @@ def _counts() -> dict:
     return {
         "prompts":  len(pod_db.lineage_pending_for_stage(conn, "prompt_review")),
         "images":   len(pod_db.lineage_pending_for_stage(conn, "image_review")),
-        "publish":  len(pod_db.lineage_pending_for_stage(conn, "publish_review")),
-        "listings": len(pod_db.lineage_pending_for_stage(conn, "etsy_publish")),
+        "drafts":   len(pod_db.lineage_pending_for_stage(conn, "etsy_publish")),
     }
 
 
-def _push_token() -> str:
-    """GIT_PUSH_TOKEN from env or Streamlit secrets (cloud deployment)."""
-    tok = os.environ.get("GIT_PUSH_TOKEN", "")
-    if tok:
-        return tok
-    try:
-        return st.secrets.get("GIT_PUSH_TOKEN", "")
-    except Exception:
-        return ""
-
-
 def _git(*args: str) -> tuple[int, str]:
-    env = os.environ.copy()
-    tok = _push_token()
-    if tok:
-        # Inject the PAT into HTTPS remotes without persisting it to .git/config.
-        env["GIT_CONFIG_COUNT"] = "1"
-        env["GIT_CONFIG_KEY_0"] = "url.https://x-access-token:%s@github.com/.insteadOf" % tok
-        env["GIT_CONFIG_VALUE_0"] = "https://github.com/"
     proc = subprocess.run(
         ["git", *args], cwd=PROJECT_ROOT,
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True,
     )
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
@@ -106,10 +83,9 @@ st.sidebar.title("Etsy POD")
 st.sidebar.caption(f"DB: `{DB_PATH}`")
 
 counts = _counts()
-st.sidebar.metric("Prompts pending",   counts["prompts"])
-st.sidebar.metric("Images pending",    counts["images"])
-st.sidebar.metric("Publish approvals", counts["publish"])
-st.sidebar.metric("Awaiting Etsy URL", counts["listings"])
+st.sidebar.metric("Prompts pending", counts["prompts"])
+st.sidebar.metric("Images pending",  counts["images"])
+st.sidebar.metric("Drafts pending",  counts["drafts"])
 
 with st.sidebar.expander("Git sync", expanded=False):
     if st.button("Pull latest pod.db"):
@@ -127,13 +103,12 @@ with st.sidebar.expander("Git sync", expanded=False):
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
 
-tab_names = ["Prompts", "Images", "Publish", "Listings", "Stats"]
+tab_names = ["Prompts", "Images", "Drafts", "Stats"]
 qp = st.query_params.get("tab")
-default_idx = {"prompts": 0, "images": 1, "publish": 2,
-               "drafts": 3, "listings": 3, "stats": 4}.get(qp or "", 0)
-# Streamlit doesn't expose a "select tab" API, so we render all five; the deep-link
+default_idx = {"prompts": 0, "images": 1, "drafts": 2, "stats": 3}.get(qp or "", 0)
+# Streamlit doesn't expose a "select tab" API, so we render all four; the deep-link
 # is purely informational (the user can click the tab themselves).
-tab_p, tab_i, tab_pub, tab_d, tab_s = st.tabs(tab_names)
+tab_p, tab_i, tab_d, tab_s = st.tabs(tab_names)
 
 
 # ── tab: Prompts ─────────────────────────────────────────────────────────────
@@ -197,20 +172,13 @@ with tab_i:
                 pod_db.lineage_set_image_status(conn, r["lineage_id"], "rejected")
             _refresh()
 
-        # Best AI pre-screen scores first so the human reviews winners quickly;
-        # unscored images sink to the end.
-        rows = sorted(rows, key=lambda r: (r["ai_score"] is None, -(r["ai_score"] or 0)))
         cols = st.columns(3)
         for i, r in enumerate(rows):
             with cols[i % 3]:
                 with st.container(border=True):
                     if r["image_url"]:
                         st.image(r["image_url"], use_container_width=True)
-                    score_bit = (f" · AI {r['ai_score']:.0f}/10"
-                                 if r["ai_score"] is not None else "")
-                    st.caption(f"{r['category'] or '—'} · `{r['lineage_id'][:8]}`{score_bit}")
-                    if r["ai_feedback"] and r["ai_feedback"] != "clean":
-                        st.caption(f"⚠️ {r['ai_feedback']}")
+                    st.caption(f"{r['category'] or '—'} · `{r['lineage_id'][:8]}`")
                     with st.expander("Prompt"):
                         st.text(r["prompt_text"] or "")
                     bc = st.columns(2)
@@ -231,57 +199,10 @@ with tab_i:
             _refresh()
 
 
-# ── tab: Publish ─────────────────────────────────────────────────────────────
-
-with tab_pub:
-    st.header("Approve drafts for Etsy publishing (Thursday)")
-    st.caption("Approving here is the cost gate: publishing lists on Etsy "
-               "($0.20/listing). Script 08 publishes approved drafts through "
-               "the Printify API — no clicking around Printify needed.")
-    conn = get_conn()
-    rows = pod_db.lineage_pending_for_stage(conn, "publish_review")
-    if not rows:
-        st.success("No drafts awaiting publish approval.")
-    else:
-        c1, c2 = st.columns(2)
-        if c1.button(f"✅ Approve all ({len(rows)})", key="approve_all_pub"):
-            for r in rows:
-                pod_db.lineage_set_publish_status(conn, r["lineage_id"], "approved")
-            _refresh()
-        if c2.button(f"❌ Reject all ({len(rows)})", key="reject_all_pub"):
-            for r in rows:
-                pod_db.lineage_set_publish_status(conn, r["lineage_id"], "rejected")
-            _refresh()
-
-        for r in rows:
-            with st.container(border=True):
-                cols = st.columns([2, 3, 1, 1])
-                if r["image_url"]:
-                    cols[0].image(r["image_url"], use_container_width=True)
-                cols[1].markdown(f"**{r['etsy_title'] or '(no title)'}**")
-                cols[1].caption(r["etsy_description"] or "")
-                if r["printify_draft_url"]:
-                    cols[1].markdown(f"[Open Printify draft]({r['printify_draft_url']})")
-                if cols[2].button("✅ Publish", key=f"a_pub_{r['lineage_id']}"):
-                    pod_db.lineage_set_publish_status(conn, r["lineage_id"], "approved")
-                    _refresh()
-                if cols[3].button("❌ Reject", key=f"r_pub_{r['lineage_id']}"):
-                    pod_db.lineage_set_publish_status(conn, r["lineage_id"], "rejected")
-                    _refresh()
-
-    approved = pod_db.lineage_pending_for_stage(conn, "publish")
-    st.divider()
-    if st.button(f"▶ Publish {len(approved)} approved draft(s) to Etsy now"):
-        log = st.expander("Publish log", expanded=True).empty()
-        rc = _run_script("08_publish_etsy.py", log)
-        (st.success if rc == 0 else st.error)(f"Script exited {rc}")
-        _refresh()
-
-
-# ── tab: Listings ────────────────────────────────────────────────────────────
+# ── tab: Drafts ──────────────────────────────────────────────────────────────
 
 with tab_d:
-    st.header("Published drafts awaiting an Etsy URL")
+    st.header("Printify drafts → Etsy (Thursday)")
     conn = get_conn()
     rows = pod_db.lineage_pending_for_stage(conn, "etsy_publish")
     if not rows:

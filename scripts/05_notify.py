@@ -30,12 +30,6 @@ items: list[dict] = ctx.get("items", []) or []
 
 date_str = datetime.now().strftime("%A, %B %d")
 
-# The Friday publish run frequently has nothing to do (no approvals yet) —
-# don't email about it.
-if stage == "published" and count == 0 and "failed" not in detail:
-    print("Nothing published — skipping notification email.")
-    raise SystemExit(0)
-
 
 def _esc(s: str | None) -> str:
     return html.escape(s or "")
@@ -115,8 +109,6 @@ def render_images() -> tuple[str, str, str]:
     cards = []
     for i in items:
         img = i.get("image_url") or ""
-        score = i.get("ai_score")
-        score_bit = f" · AI {score:.0f}/10" if isinstance(score, (int, float)) else ""
         cards.append(
             f"""<td style="vertical-align:top;padding:8px;width:33%">
                   <a href="{_esc(img)}">
@@ -124,7 +116,7 @@ def render_images() -> tuple[str, str, str]:
                   </a>
                   <div style="font-size:12px;color:#555;margin-top:6px">
                     <strong>{_esc(i.get('category',''))}</strong> ·
-                    <code>{_esc((i.get('lineage_id') or '')[:8])}</code>{_esc(score_bit)}
+                    <code>{_esc((i.get('lineage_id') or '')[:8])}</code>
                   </div>
                   <div style="font-size:13px;line-height:1.4;margin-top:4px">
                     {_esc(_truncate(i.get('prompt',''), 180))}
@@ -147,16 +139,15 @@ def render_images() -> tuple[str, str, str]:
 
 
 def render_drafts() -> tuple[str, str, str]:
-    subject = f"[Etsy Pipeline] {count} drafts awaiting publish approval — {date_str}"
+    subject = f"[Etsy Pipeline] {count} Printify drafts ready — {date_str}"
     plain = (
         f"{detail}\n\n"
-        f"Approve for publishing in the app: {LOCAL_APP_URL}/?tab=publish\n\n"
+        f"Open the local approval app: {LOCAL_APP_URL}/?tab=drafts\n\n"
         + "\n\n".join(
             f"- {i.get('etsy_title','(no title)')}\n  {i.get('printify_draft_url','')}"
             for i in items
         )
-        + "\n\nApproved drafts are published to Etsy automatically (script 08); "
-          "Sunday's stats sync then auto-detects the listing URLs."
+        + "\n\nSunday's stats sync auto-detects new Etsy listings by title."
     )
     rows_html = "\n".join(
         f"""<tr>
@@ -172,45 +163,13 @@ def render_drafts() -> tuple[str, str, str]:
     body_html = (
         f'<table style="width:100%;border-collapse:collapse">{rows_html}</table>'
         '<p style="color:#666;font-size:13px;margin-top:16px">'
-        "Approve in the Publish tab and script 08 lists them on Etsy via the "
-        "Printify API — no manual publishing. Sunday's stats sync auto-detects "
-        "the new listing URLs by title."
+        "Sunday's stats sync auto-detects new Etsy listings by title — paste manually only if you can't wait."
         "</p>"
     )
     html_doc = _shell(
-        title=f"{count} drafts awaiting publish approval",
-        app_link=f"{LOCAL_APP_URL}/?tab=publish",
+        title=f"{count} Printify drafts ready",
+        app_link=f"{LOCAL_APP_URL}/?tab=drafts",
         intro=detail or f"{count} drafts created.",
-        body_html=body_html,
-    )
-    return subject, plain, html_doc
-
-
-def render_published() -> tuple[str, str, str]:
-    subject = f"[Etsy Pipeline] {count} design(s) published to Etsy — {date_str}"
-    plain = (
-        f"{detail}\n\n"
-        + "\n".join(f"- {i.get('etsy_title','(no title)')}" for i in items)
-        + "\n\nNo action needed — listing URLs will be auto-detected by the next stats sync."
-    )
-    rows_html = "\n".join(
-        f"""<tr>
-              <td style="padding:8px;border-bottom:1px solid #eee;font-size:14px">
-                ✅ <strong>{_esc(i.get('etsy_title','(no title)'))}</strong>
-              </td>
-            </tr>"""
-        for i in items
-    )
-    body_html = (
-        f'<table style="width:100%;border-collapse:collapse">{rows_html}</table>'
-        '<p style="color:#666;font-size:13px;margin-top:16px">'
-        "No action needed. Etsy listing URLs will be auto-detected by the next stats sync."
-        "</p>"
-    )
-    html_doc = _shell(
-        title=f"{count} design(s) published to Etsy",
-        app_link=f"{LOCAL_APP_URL}/?tab=listings",
-        intro=detail or f"{count} design(s) published.",
         body_html=body_html,
     )
     return subject, plain, html_doc
@@ -232,10 +191,9 @@ def render_default() -> tuple[str, str, str]:
 
 
 renderers = {
-    "prompts":   render_prompts,
-    "images":    render_images,
-    "drafts":    render_drafts,
-    "published": render_published,
+    "prompts": render_prompts,
+    "images":  render_images,
+    "drafts":  render_drafts,
 }
 subject, plain_body, html_body = renderers.get(stage, render_default)()
 

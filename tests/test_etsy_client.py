@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from etsy_client import EtsyClient, MAX_OFFSET, QuotaExceededError, TokenBucket  # noqa: E402
-from schemas import EtsyListing  # noqa: E402
+from src.etsy_client import EtsyClient, MAX_OFFSET, QuotaExceededError, TokenBucket
+from src.schemas import EtsyListing
 
 FIXTURE_PATH = PROJECT_ROOT / "tests" / "fixtures" / "etsy_search_sample.json"
 

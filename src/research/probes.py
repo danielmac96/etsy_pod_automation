@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from schemas import EtsyListing
+from src.schemas import EtsyListing
 from src.db import EtsyListingRow, EtsyProbe, Theme
 
 PROBES_PER_THEME = 3

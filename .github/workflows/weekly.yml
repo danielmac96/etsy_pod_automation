@@ -22,7 +22,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ETSY_API_KEY: ${{ secrets.ETSY_API_KEY }}
 
-      - name: Generate 25 prompts and save to pod.db
+      - name: Generate 25 prompts
         run: python scripts/02_generate_prompts.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
